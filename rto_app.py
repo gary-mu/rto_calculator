@@ -8,6 +8,7 @@ from pandas.tseries.holiday import USFederalHolidayCalendar
 from openai import OpenAI
 import os
 databricks_key = st.secrets['general']["DATABRICKS_API_KEY"]
+openai_key = st.secrets['general']["OPENAI_API_KEY"]
 
 def get_custom_holidays(start_date, end_date):
     # Get US federal holidays
@@ -127,7 +128,6 @@ def show_ai_button(monthly_data, monthly_workdays, holidays):
             {holidays}
 
             Use this format for your suggestions:
-            [BEGIN SUGGESTION--do not include this tag in your response]
             **Overall summary**: [summary of the strategy]
 
             PTO strategy by month:
@@ -135,15 +135,11 @@ def show_ai_button(monthly_data, monthly_workdays, holidays):
              - PTO Days: [Number of PTO Days]
              - Total required office days: [Number of days to go into office subtracting the suggested PTO and holidays]
              - Dates to take: [Dates to take PTO to maximize day offs including weekends and holidays]
-            
-            [END SUGGESTION--do not include this tag in your response]
-
             """
 
 
             client = OpenAI(
-                api_key=databricks_key,
-                base_url="https://czi-ie-connections-prod-databricks-workspace.cloud.databricks.com/serving-endpoints"
+                api_key=openai_key
             )
             chat_completion = client.chat.completions.create(
                 messages=[
@@ -156,7 +152,7 @@ def show_ai_button(monthly_data, monthly_workdays, holidays):
                         "content": prompt
                     }
                 ],
-                model="databricks-meta-llama-3-3-70b-instruct",
+                model="gpt-4o-mini",
                 max_tokens=1256
             )
             output = chat_completion.choices[0].message.content
@@ -181,7 +177,7 @@ def init_session_state():
     if 'total_pto' not in st.session_state:
         st.session_state.total_pto = 0.0
     if 'pto_accounting_policy' not in st.session_state:
-        st.session_state.pto_accounting_policy = 'Default CZI PTO accounting policy'
+        st.session_state.pto_accounting_policy = 'PTO subtract from workdays'
 
 #####START OF THE APP ########
 init_session_state() # Initialize session state variables
@@ -211,7 +207,7 @@ total_pto_allowance = st.number_input(
 st.markdown("**2. Use default CZI PTO accounting policy**")
 pto_accounting_policy = st.radio(
             'Choose how PTO is accounted for', 
-            ['Default CZI PTO accounting policy', 'Alternative PTO accounting policy'],
+            ['PTO subtract from workdays', 'PTO as a day in office'],
             horizontal=True,
             key='pto_accounting_policy', 
             help='By default, PTO is subtracted from work days. Alternative policy is count PTO as a day in office'
@@ -260,7 +256,7 @@ if st.session_state.tab == "Option1: Avg PTO per month":
         # Calculate monthly data
         monthly_data = []
         for month, workdays in monthly_workdays.items():
-            if st.session_state.pto_accounting_policy == 'Default CZI PTO accounting policy':
+            if st.session_state.pto_accounting_policy == 'PTO subtract from workdays':
                 net_days = workdays - monthly_pto_avg
                 office_days = round(net_days * 0.6, 0)
             else:
@@ -319,7 +315,7 @@ elif st.session_state.tab == "Option2: PTO for each month":
             # Calculate monthly data
             monthly_data = []
             for month, workdays in monthly_workdays.items():
-                if st.session_state.pto_accounting_policy == 'Default CZI PTO accounting policy':
+                if st.session_state.pto_accounting_policy == 'PTO subtract from workdays':
                     net_days = workdays - monthly_pto[month]
                     office_days = round(net_days * 0.6, 0)
                 else:
