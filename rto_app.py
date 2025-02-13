@@ -5,6 +5,9 @@ import numpy as np
 from datetime import datetime, timedelta
 import plotly.express as px
 from pandas.tseries.holiday import USFederalHolidayCalendar
+from openai import OpenAI
+import os
+databricks_key = st.secrets['general']["DATABRICKS_API_KEY"]
 
 def get_custom_holidays(start_date, end_date):
     # Get US federal holidays
@@ -104,6 +107,61 @@ def display_metrics_and_charts(monthly_data, monthly_workdays, holidays):
     # Show table in second tab
     with table_tab:
         st.dataframe(df, hide_index=True, use_container_width=True)
+    
+    show_ai_button(monthly_data, monthly_workdays, holidays)
+
+def show_ai_button(monthly_data, monthly_workdays, holidays):
+    if st.button("AI Suggest PTO Plan"):
+        with st.spinner("Thinking...feel free to grab a beverage while you wait"):
+            prompt = f"""
+            Use the monthly data and holidays to help me optimize my PTO plan.
+            Focus on which month I should take PTO to minimize the total office days required.
+            Factor in weekends and company holidays to maximize day offs.
+            Do not suggest day offs between Christmas and New year since this is already a company holiday.
+            Also avoid suggesting taking day off for a whole week if I need to take Monday to Friday off using PTOs.
+
+            Here is the monthly data of how many work days, holidays, PTO days and office days required for each month:
+            {monthly_data}
+
+            Here are the company holidays during this period:
+            {holidays}
+
+            Use this format for your suggestions:
+            [BEGIN SUGGESTION--do not include this tag in your response]
+            **Overall summary**: [summary of the strategy]
+
+            PTO strategy by month:
+            - Month: [Month]
+             - PTO Days: [Number of PTO Days]
+             - Total required office days: [Number of days to go into office subtracting the suggested PTO and holidays]
+             - Dates to take: [Dates to take PTO to maximize day offs including weekends and holidays]
+            
+            [END SUGGESTION--do not include this tag in your response]
+
+            """
+
+
+            client = OpenAI(
+                api_key=databricks_key,
+                base_url="https://czi-ie-connections-prod-databricks-workspace.cloud.databricks.com/serving-endpoints"
+            )
+            chat_completion = client.chat.completions.create(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an AI assistant"
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                model="databricks-meta-llama-3-3-70b-instruct",
+                max_tokens=1256
+            )
+            output = chat_completion.choices[0].message.content
+        
+        st.markdown(f"**AI Suggested PTO Plan**:\n {output}")        
 
 def reset_global_var():
     st.session_state.monthly_data = None
@@ -256,7 +314,6 @@ elif st.session_state.tab == "Option2: PTO for each month":
         
         # Display total PTO with warning if over 30 days
         st.markdown(f"**Total PTO planned in this period: {total_pto:.1f} days**")
-        
         
         if total_pto <= total_pto_allowance:
             # Calculate monthly data
