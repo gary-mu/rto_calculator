@@ -185,10 +185,7 @@ init_session_state() # Initialize session state variables
 st.title("Return to Office Calculator")
 st.write("Calculate your required office days based on the RTO policy")
 
-
-
 #Side bar expanders for PTO inputs
-
 with st.sidebar:
     # Date range selection
     with st.container():
@@ -297,7 +294,6 @@ if st.session_state.tab == "Option1: Avg PTO per month":
                 'Net Work Days': net_days,
                 'Office Days Required': office_days
             })
-        print(pd.DataFrame(monthly_data))
         display_metrics_and_charts(monthly_data, monthly_workdays, holidays)
     else:
         st.error("Total PTO exceeds allowance!")
@@ -358,8 +354,6 @@ elif st.session_state.tab == "Option2: PTO for each month":
                     'Net Work Days': net_days,
                     'Office Days Required': office_days
                 })
-            # print('--------')
-            # print(pd.DataFrame(monthly_data))
             display_metrics_and_charts(monthly_data, monthly_workdays, holidays)
         else:
             st.error("Total PTO exceeds allowance!")
