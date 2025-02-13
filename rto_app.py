@@ -183,74 +183,102 @@ def init_session_state():
 init_session_state() # Initialize session state variables
 
 st.title("Return to Office Calculator")
-st.write("Calculate your required office days based on the 60% policy")
-
-# Date range selection
-col1, col2 = st.columns(2)
-with col1:
-    start_date = st.date_input("Start Date", datetime(datetime.today().year, 1, 1))
-with col2:
-    end_date = st.date_input("End Date", datetime(datetime.today().year, 12, 31))
+st.write("Calculate your required office days based on the RTO policy")
 
 
-# PTO input
-st.subheader("PTO Planning")
-st.markdown("**1. Enter number of PTO days you have in this period:**")
-total_pto_allowance = st.number_input(
-                "Enter PTO allowance for the period",
-                min_value=20.0,
-                max_value=60.0,
-                value=20.0,
-                step=0.5,
-                key=f"pto_days")
 
-st.markdown("**2. Use default CZI PTO accounting policy**")
-pto_accounting_policy = st.radio(
+#Side bar expanders for PTO inputs
+
+with st.sidebar:
+    # Date range selection
+    with st.container():
+        st.subheader("Date Range for RTO calculation")
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date = st.date_input("Start Date", datetime(datetime.today().year, 1, 1))
+        with col2:
+            end_date = st.date_input("End Date", datetime(datetime.today().year, 12, 31))
+    
+    with st.container(border = True):
+        st.subheader("RTO policy")
+        st.number_input(
+            "% of workdays required in office",
+            min_value=0.0,
+            max_value=100.0,
+            value=60.0,
+            step=1.0,
+            key="workdays_percentage",
+            help="Enter the percentage of workdays you are required to be in office"
+        )
+
+
+    st.subheader("PTO Planning")
+    with st.expander("PTO days you have in this period", expanded = True):
+        total_pto_allowance = st.number_input(
+                                    "PTO allowance",
+                                    min_value=20.0,
+                                    max_value=60.0,
+                                    value=20.0,
+                                    step=0.5,
+                                    key=f"pto_days",
+                                    help="Enter total PTO allowance for the period, this may include carry-over PTO days"
+                                )
+    
+    with st.expander("PTO accounting policy", expanded = True):
+        pto_accounting_policy = st.radio(
             'Choose how PTO is accounted for', 
             ['PTO subtract from workdays', 'PTO as a day in office'],
             horizontal=True,
             key='pto_accounting_policy', 
-            help='By default, PTO is subtracted from work days. Alternative policy is count PTO as a day in office'
-)
-if st.session_state.pto_accounting_policy != pto_accounting_policy:
-    st.session_state.pto_accounting_policy = pto_accounting_policy
-
-st.markdown("**3. Choose how you want to plan your PTO days**")
-tab = st.radio(
-            "Choose an option:",
-            ["Option1: Avg PTO per month", "Option2: PTO for each month"],
-            horizontal=True,
-            key="pto_selector", 
-            index = 0
+            help="""
+            PTO subtracted from work days means total number of work days is reduced by number of PTO you take. 
+            PTO as a day in office means total number of work day is not impacted, but PTO is considered as a day in office.
+            """
         )
-if st.session_state.tab != tab:
-    st.session_state.tab = tab
+        if st.session_state.pto_accounting_policy != pto_accounting_policy:
+            st.session_state.pto_accounting_policy = pto_accounting_policy
+
+    with st.expander("Choose how you want to plan your PTO days", expanded = True):
+        tab = st.radio(
+                        "Choose an option:",
+                        ["Option1: Avg PTO per month", "Option2: PTO for each month"],
+                        horizontal=True,
+                        key="pto_selector", 
+                        index = 0, 
+                        help="""Choose how you want to plan your PTO days. First option is a quick way to see PTO impact 
+                        if you have an idea of the average number of PTO you take a month.
+                        If you have specific PTO days for individual month, choose the second option.
+                        """
+                )
+        if st.session_state.tab != tab:
+            st.session_state.tab = tab
 
 
 #Option 1: use average PTO days per month
 if st.session_state.tab == "Option1: Avg PTO per month":
     reset_global_var()
-    monthly_pto = st.slider("Select average PTO days taken per month", 
-                            min_value=0.0, 
-                            max_value=7.0, 
-                            value=0.0,
-                            step=0.5,
-                            help="Select average number of PTO days you plan to take per month")
-    #Get number of holidays
-    holidays = get_custom_holidays(start_date, end_date)
+    with st.container(border = True):
+        monthly_pto = st.slider("Select average PTO days taken per month", 
+                                min_value=0.0, 
+                                max_value=7.0, 
+                                value=0.0,
+                                step=0.5,
+                                help="Select average number of PTO days you plan to take per month")
+        #Get number of holidays
+        holidays = get_custom_holidays(start_date, end_date)
 
-    # Calculate workdays for the entire period
-    total_workdays = calculate_workdays(start_date, end_date)
-    
-    # Calculate monthly breakdown
-    monthly_workdays = calculate_monthly_workdays(start_date, end_date)
-    
-    # Calculate office days (60% of workdays minus PTO)
-    months_count = len(monthly_workdays)
-    total_pto = monthly_pto * months_count
-    st.session_state.total_pto = total_pto
-    monthly_pto_avg = monthly_pto
-    st.markdown(f"**Total PTO planned in this period: {total_pto:.1f} days**")
+        # Calculate workdays for the entire period
+        total_workdays = calculate_workdays(start_date, end_date)
+        
+        # Calculate monthly breakdown
+        monthly_workdays = calculate_monthly_workdays(start_date, end_date)
+        
+        # Calculate office days (60% of workdays minus PTO)
+        months_count = len(monthly_workdays)
+        total_pto = monthly_pto * months_count
+        st.session_state.total_pto = total_pto
+        monthly_pto_avg = monthly_pto
+        st.markdown(f"**Total PTO planned in this period: {total_pto:.1f} days**")
 
     if total_pto <= total_pto_allowance:
         # Calculate monthly data
@@ -284,32 +312,34 @@ elif st.session_state.tab == "Option2: PTO for each month":
         # Calculate monthly workdays
         monthly_workdays = calculate_monthly_workdays(start_date, end_date)
         # Create columns for PTO inputs
-        cols_per_row = 4
-        monthly_pto = {}
-        # Create rows of columns for better layout
-        months = list(monthly_workdays.keys())
-        for i in range(0, len(months), cols_per_row):
-            cols = st.columns(cols_per_row)
-            for j, col in enumerate(cols):
-                if i + j < len(months):
-                    month = months[i + j]
-                    # Format month for display (e.g., "2024-01" to "Jan 2024")
-                    display_month = pd.to_datetime(month + "-01").strftime("%b %Y")
-                    monthly_pto[month] = col.number_input(
-                        display_month,
-                        min_value=0.0,
-                        max_value=float(monthly_workdays[month]),
-                        value=st.session_state.pto_default_value,
-                        step=0.5,
-                        key=f"pto_{month}"
-                    )
-        # Calculate total PTO
-        total_pto = sum(monthly_pto.values())
-        st.session_state.total_pto = total_pto
-        monthly_pto_avg = total_pto/len(months)
-        
-        # Display total PTO with warning if over 30 days
-        st.markdown(f"**Total PTO planned in this period: {total_pto:.1f} days**")
+        with st.container(border = True):
+            st.write('Enter PTO days for each month')
+            cols_per_row = 4
+            monthly_pto = {}
+            # Create rows of columns for better layout
+            months = list(monthly_workdays.keys())
+            for i in range(0, len(months), cols_per_row):
+                cols = st.columns(cols_per_row)
+                for j, col in enumerate(cols):
+                    if i + j < len(months):
+                        month = months[i + j]
+                        # Format month for display (e.g., "2024-01" to "Jan 2024")
+                        display_month = pd.to_datetime(month + "-01").strftime("%b %Y")
+                        monthly_pto[month] = col.number_input(
+                            display_month,
+                            min_value=0.0,
+                            max_value=float(monthly_workdays[month]),
+                            value=st.session_state.pto_default_value,
+                            step=0.5,
+                            key=f"pto_{month}"
+                        )
+            # Calculate total PTO
+            total_pto = sum(monthly_pto.values())
+            st.session_state.total_pto = total_pto
+            monthly_pto_avg = total_pto/len(months)
+            
+            # Display total PTO with warning if over 30 days
+            st.markdown(f"**Total PTO planned in this period: {total_pto:.1f} days**")
         
         if total_pto <= total_pto_allowance:
             # Calculate monthly data
