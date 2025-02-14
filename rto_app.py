@@ -1,4 +1,5 @@
 import streamlit as st
+import holidays as hd
 import math
 import pandas as pd
 import numpy as np
@@ -7,38 +8,57 @@ import plotly.express as px
 from pandas.tseries.holiday import USFederalHolidayCalendar
 from openai import OpenAI
 import os
+
 databricks_key = st.secrets['general']["DATABRICKS_API_KEY"]
 openai_key = st.secrets['general']["OPENAI_API_KEY"]
 
-def get_custom_holidays(start_date, end_date):
-    # Get US federal holidays
-    cal = USFederalHolidayCalendar()
-    holidays = cal.holidays(start=start_date, end=end_date)
-
-    year = start_date.year
+def get_custom_holidays(start_date, end_date, extended_christmas_break):
     start = pd.to_datetime(start_date)
     end = pd.to_datetime(end_date)
 
-    # Compute the day after Thanksgiving (4th Thursday of November + 1 day)
-    thanksgiving = pd.date_range(start=f'{year}-11-01', end=f'{year}-11-30', freq='W-THU')[3]
-    christmas = pd.to_datetime(f'{year}-12-25')
+    # Initialize US holidays
+    us_holidays = hd.US(years=range(start_date.year, end_date.year + 1))
+
+    # Get federal holidays from the `holidays` module
+    federal_holidays = {date: name for date, name in us_holidays.items() if start <= pd.to_datetime(date) <= end}
+
+    # Compute additional holidays
+    additional_holidays = {}
+
+    year = start_date.year
+    thanksgiving = pd.to_datetime(pd.date_range(start=f"{year}-11-01", end=f"{year}-11-30", freq="W-THU")[3])
+   
     if start <= thanksgiving <= end:
         day_after_thanksgiving = thanksgiving + timedelta(days=1)
-        additional_holidays = pd.DatetimeIndex([day_after_thanksgiving])
-        holidays = holidays.append(additional_holidays).sort_values()
+        additional_holidays[day_after_thanksgiving] = "Day After Thanksgiving"
 
-    if start <= christmas <= end:
-    # Compute the day before Christmas (December 24)
-        min_end = min(end, pd.to_datetime(f'{year}-12-31'))
-        christmas_break = pd.date_range(start=f'{year}-12-24', end=min_end)
+    # Add Christmas Break (Dec 24–Dec 31, skipping weekends)
+    if extended_christmas_break:
+        christmas_break = pd.date_range(start=f"{year}-12-24", end=f"{year}-12-31")
         christmas_break = christmas_break[~christmas_break.weekday.isin([5, 6])]
-        holidays = holidays.append(christmas_break).sort_values()
 
-    return holidays
+        for date in christmas_break:
+            if start <= date <= end:
+                additional_holidays[date] = "Christmas Break"
+
+    # Merge all holidays
+    all_holidays = {**federal_holidays, **additional_holidays}
+
+    # Convert to DataFrame
+    holiday_df = pd.DataFrame(list(all_holidays.items()), columns=["Date", "Holiday Name"])
+    holiday_df["Date"] = pd.to_datetime(holiday_df["Date"])
+
+    holiday_df_sorted = holiday_df.sort_values("Date").reset_index(drop=True)
+
+    holiday_result_dict = {
+        'holiday_df': holiday_df,
+        'holiday_dates': holiday_df["Date"]
+    }
+    return holiday_result_dict
 
 def calculate_workdays(start_date, end_date):
     """Calculate number of workdays between two dates, excluding US federal holidays."""
-    holidays = get_custom_holidays(start_date, end_date)
+    holidays = get_custom_holidays(start_date, end_date, extended_christmas_break)['holiday_dates']
     
     # Create date range and convert to dataframe
     date_range = pd.date_range(start=start_date, end=end_date)
@@ -186,7 +206,7 @@ def show_ai_button(monthly_data, monthly_workdays, holidays, additional_info=Non
                         "content": prompt
                     }
                 ],
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 max_tokens=1256
             )
             output = chat_completion.choices[0].message.content
@@ -216,8 +236,10 @@ def init_session_state():
         st.session_state.ai_pto_factor = 'Yes, and plan additional PTOs'
     if 'ai_pto_days' not in st.session_state:
         st.session_state.ai_pto_days = 0
-    # if 'pto_allowance' not in st.session_state:
-    #     st.session_state.pto_allowance = 20.0
+    if 'extended_christmas_break' not in st.session_state:
+        st.session_state.extended_christmas_break = True
+        extended_christmas_break = st.session_state.extended_christmas_break
+
 
 #####START OF THE APP ########
 init_session_state() # Initialize session state variables
@@ -236,6 +258,8 @@ with st.sidebar:
             start_date = st.date_input("Start Date", datetime(datetime.today().year, 1, 1))
         with col2:
             end_date = st.date_input("End Date", datetime(datetime.today().year, 12, 31))
+        st.checkbox("Holiday between Christmas and New Year?", value=True,key="extended_christmas_break")
+        extended_christmas_break = st.session_state.extended_christmas_break
     
     with st.container(border = True):
         st.subheader("RTO policy")
@@ -290,108 +314,51 @@ with st.sidebar:
                 )
         if st.session_state.tab != tab:
             st.session_state.tab = tab
+#Tabs for PTO app & Company holiday views
 
+app_tab, holiday_tab = st.tabs(["PTO Planner", "Company Holidays"])
 
-#Option 1: use average PTO days per month
-if st.session_state.tab == "Option1: Avg PTO per month":
-    reset_global_var()
-    with st.container(border = True):
-        monthly_pto = st.slider("Select average PTO days taken per month", 
-                                min_value=0.0, 
-                                max_value=7.0, 
-                                value=0.0,
-                                step=0.5,
-                                help="Select average number of PTO days you plan to take per month")
-        #Get number of holidays
-        holidays = get_custom_holidays(start_date, end_date)
-
-        # Calculate workdays for the entire period
-        total_workdays = calculate_workdays(start_date, end_date)
-        
-        # Calculate monthly breakdown
-        monthly_workdays = calculate_monthly_workdays(start_date, end_date)
-        
-        # Calculate office days (60% of workdays minus PTO)
-        months_count = len(monthly_workdays)
-        total_pto = monthly_pto * months_count
-        st.session_state.total_pto = total_pto
-        monthly_pto_avg = monthly_pto
-        st.markdown(f"**Total PTO planned in this period: {total_pto:.1f} days**")
-
-    if total_pto <= total_pto_allowance:
-        # Calculate monthly data
-        monthly_data = []
-        for month, workdays in monthly_workdays.items():
-            if st.session_state.pto_accounting_policy == 'PTO subtracted from workdays':
-                net_days = workdays - monthly_pto_avg
-                office_days = round(net_days * 0.6, 0)
-            else:
-                net_days = workdays
-                office_days = round(net_days * 0.6, 0) - monthly_pto_avg
-            monthly_data.append({
-                'Month': pd.to_datetime(month + "-01").strftime("%b %Y"),
-                'Work Days': workdays,
-                'PTO Days': monthly_pto,
-                'Net Work Days': net_days,
-                'Office Days Required': office_days
-            })
-        display_metrics_and_charts(monthly_data, monthly_workdays, holidays)
-    else:
-        st.error("Total PTO exceeds allowance!")
-        pass
-
-#option 2: PTO for each month
-elif st.session_state.tab == "Option2: PTO for each month":
-    reset_global_var()
-    if start_date and end_date and start_date <= end_date:
-        #Get number of holidays
-        holidays = get_custom_holidays(start_date, end_date)
-        # Calculate monthly workdays
-        monthly_workdays = calculate_monthly_workdays(start_date, end_date)
-        # Create columns for PTO inputs
+with app_tab:
+    #Option 1: use average PTO days per month
+    if st.session_state.tab == "Option1: Avg PTO per month":
+        reset_global_var()
         with st.container(border = True):
-            st.write('Enter PTO days for each month')
-            cols_per_row = 4
-            monthly_pto = {}
-            # Create rows of columns for better layout
-            months = list(monthly_workdays.keys())
-            for i in range(0, len(months), cols_per_row):
-                cols = st.columns(cols_per_row)
-                for j, col in enumerate(cols):
-                    if i + j < len(months):
-                        month = months[i + j]
-                        # Format month for display (e.g., "2024-01" to "Jan 2024")
-                        display_month = pd.to_datetime(month + "-01").strftime("%b %Y")
-                        monthly_pto[month] = col.number_input(
-                            display_month,
-                            min_value=0.0,
-                            max_value=float(monthly_workdays[month]),
-                            value=st.session_state.pto_default_value,
-                            step=0.5,
-                            key=f"pto_{month}"
-                        )
-            # Calculate total PTO
-            total_pto = sum(monthly_pto.values())
-            st.session_state.total_pto = total_pto
-            monthly_pto_avg = total_pto/len(months)
+            monthly_pto = st.slider("Select average PTO days taken per month", 
+                                    min_value=0.0, 
+                                    max_value=7.0, 
+                                    value=0.0,
+                                    step=0.5,
+                                    help="Select average number of PTO days you plan to take per month")
+            #Get number of holidays
+            holidays = get_custom_holidays(start_date, end_date, extended_christmas_break)['holiday_dates']
+
+            # Calculate workdays for the entire period
+            total_workdays = calculate_workdays(start_date, end_date)
             
-            # Display total PTO with warning if over 30 days
+            # Calculate monthly breakdown
+            monthly_workdays = calculate_monthly_workdays(start_date, end_date)
+            
+            # Calculate office days (60% of workdays minus PTO)
+            months_count = len(monthly_workdays)
+            total_pto = monthly_pto * months_count
+            st.session_state.total_pto = total_pto
+            monthly_pto_avg = monthly_pto
             st.markdown(f"**Total PTO planned in this period: {total_pto:.1f} days**")
-        
+
         if total_pto <= total_pto_allowance:
             # Calculate monthly data
             monthly_data = []
             for month, workdays in monthly_workdays.items():
                 if st.session_state.pto_accounting_policy == 'PTO subtracted from workdays':
-                    net_days = workdays - monthly_pto[month]
+                    net_days = workdays - monthly_pto_avg
                     office_days = round(net_days * 0.6, 0)
                 else:
                     net_days = workdays
-                    office_days = round(net_days * 0.6, 0) - monthly_pto[month]
+                    office_days = round(net_days * 0.6, 0) - monthly_pto_avg
                 monthly_data.append({
                     'Month': pd.to_datetime(month + "-01").strftime("%b %Y"),
                     'Work Days': workdays,
-                    'PTO Days': monthly_pto[month],
+                    'PTO Days': monthly_pto,
                     'Net Work Days': net_days,
                     'Office Days Required': office_days
                 })
@@ -399,4 +366,69 @@ elif st.session_state.tab == "Option2: PTO for each month":
         else:
             st.error("Total PTO exceeds allowance!")
             pass
-        
+
+    #option 2: PTO for each month
+    elif st.session_state.tab == "Option2: PTO for each month":
+        reset_global_var()
+        if start_date and end_date and start_date <= end_date:
+            #Get number of holidays
+            holidays = get_custom_holidays(start_date, end_date, extended_christmas_break)['holiday_dates']
+            # Calculate monthly workdays
+            monthly_workdays = calculate_monthly_workdays(start_date, end_date)
+            # Create columns for PTO inputs
+            with st.container(border = True):
+                st.write('Enter PTO days for each month')
+                cols_per_row = 4
+                monthly_pto = {}
+                # Create rows of columns for better layout
+                months = list(monthly_workdays.keys())
+                for i in range(0, len(months), cols_per_row):
+                    cols = st.columns(cols_per_row)
+                    for j, col in enumerate(cols):
+                        if i + j < len(months):
+                            month = months[i + j]
+                            # Format month for display (e.g., "2024-01" to "Jan 2024")
+                            display_month = pd.to_datetime(month + "-01").strftime("%b %Y")
+                            monthly_pto[month] = col.number_input(
+                                display_month,
+                                min_value=0.0,
+                                max_value=float(monthly_workdays[month]),
+                                value=st.session_state.pto_default_value,
+                                step=0.5,
+                                key=f"pto_{month}"
+                            )
+                # Calculate total PTO
+                total_pto = sum(monthly_pto.values())
+                st.session_state.total_pto = total_pto
+                monthly_pto_avg = total_pto/len(months)
+                
+                # Display total PTO with warning if over 30 days
+                st.markdown(f"**Total PTO planned in this period: {total_pto:.1f} days**")
+            
+            if total_pto <= total_pto_allowance:
+                # Calculate monthly data
+                monthly_data = []
+                for month, workdays in monthly_workdays.items():
+                    if st.session_state.pto_accounting_policy == 'PTO subtracted from workdays':
+                        net_days = workdays - monthly_pto[month]
+                        office_days = round(net_days * 0.6, 0)
+                    else:
+                        net_days = workdays
+                        office_days = round(net_days * 0.6, 0) - monthly_pto[month]
+                    monthly_data.append({
+                        'Month': pd.to_datetime(month + "-01").strftime("%b %Y"),
+                        'Work Days': workdays,
+                        'PTO Days': monthly_pto[month],
+                        'Net Work Days': net_days,
+                        'Office Days Required': office_days
+                    })
+                display_metrics_and_charts(monthly_data, monthly_workdays, holidays)
+            else:
+                st.error("Total PTO exceeds allowance!")
+                pass
+
+with holiday_tab:
+    st.subheader("Company Holidays")
+    holidays_df = get_custom_holidays(start_date, end_date, extended_christmas_break)['holiday_df']
+    holidays_df['Date'] = holidays_df['Date'].dt.strftime('%b %d, %Y')
+    st.dataframe(holidays_df, hide_index=True, use_container_width=True)
