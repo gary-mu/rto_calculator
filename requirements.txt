@@ -1,4 +1,5 @@
 datetime
+holidays
 numpy
 openai
 pandas
