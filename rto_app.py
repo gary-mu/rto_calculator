@@ -109,23 +109,57 @@ def display_metrics_and_charts(monthly_data, monthly_workdays, holidays):
     with table_tab:
         st.dataframe(df, hide_index=True, use_container_width=True)
     
-    show_ai_button(monthly_data, monthly_workdays, holidays)
+    with st.container(border = True):
+        st.subheader("✨ Use AI to help for PTO Planning ✨")
+        ai_pto_factor = st.radio("Do you want AI to factor in PTO you have already planned (entered)?", 
+                ["Yes, and plan additional PTOs", "No, help me plan from scratch"],
+                key="ai_pto_factor")
+        if st.session_state.ai_pto_factor == "No, help me plan from scratch":
+            ai_pto_days=st.number_input(
+                'How many PTOs total do you want to take?',
+                min_value=0.0,
+                max_value=60.0,
+                value=3.0,
+                step = 0.5, 
+                key="ai_pto_days"
+            )
+            
+        st.text_input(label="What other criteria do you want AI to consider?",
+                    placeholder='eg. I want to take 2 weeks off in July',
+                    key="ai_pto_additional_criteria")
+        
+        additional_info =f"""
+        Here is the additional info to consider:
 
-def show_ai_button(monthly_data, monthly_workdays, holidays):
-    if st.button("AI Suggest PTO Plan"):
+        Total PTO I want to take: {st.session_state.ai_pto_days}
+
+        Additional criteria: {st.session_state.ai_pto_additional_criteria}
+        """
+        pto_allowance=st.session_state.pto_allowance
+        show_ai_button(monthly_data, monthly_workdays, holidays, additional_info, pto_allowance)
+
+def show_ai_button(monthly_data, monthly_workdays, holidays, additional_info=None, pto_allowance=None):
+    if st.button("🪄AI Suggest PTO Plan", type='primary'):
         with st.spinner("Thinking...feel free to grab a beverage while you wait"):
             prompt = f"""
             Use the monthly data and holidays to help me optimize my PTO plan.
+            I have a total {pto_allowance} number of PTO days to take in this period.
+
             Focus on which month I should take PTO to minimize the total office days required.
             Factor in weekends and company holidays to maximize day offs.
             Do not suggest day offs between Christmas and New year since this is already a company holiday.
             Also avoid suggesting taking day off for a whole week if I need to take Monday to Friday off using PTOs.
+
+            Remember, office days are 60% of total work days excluding PTOs and holidays.
 
             Here is the monthly data of how many work days, holidays, PTO days and office days required for each month:
             {monthly_data}
 
             Here are the company holidays during this period:
             {holidays}
+
+            Here are additional criteria I want you to consider:
+            {additional_info}
 
             Use this format for your suggestions:
             **Overall summary**: [summary of the strategy]
@@ -136,7 +170,7 @@ def show_ai_button(monthly_data, monthly_workdays, holidays):
              - Total required office days: [Number of days to go into office subtracting the suggested PTO and holidays]
              - Dates to take: [Dates to take PTO to maximize day offs including weekends and holidays]
             """
-
+            print(prompt)
 
             client = OpenAI(
                 api_key=openai_key
@@ -177,7 +211,13 @@ def init_session_state():
     if 'total_pto' not in st.session_state:
         st.session_state.total_pto = 0.0
     if 'pto_accounting_policy' not in st.session_state:
-        st.session_state.pto_accounting_policy = 'PTO subtract from workdays'
+        st.session_state.pto_accounting_policy = 'PTO subtracted from workdays'
+    if 'ai_pto_factor' not in st.session_state:
+        st.session_state.ai_pto_factor = 'Yes, and plan additional PTOs'
+    if 'ai_pto_days' not in st.session_state:
+        st.session_state.ai_pto_days = 0
+    # if 'pto_allowance' not in st.session_state:
+    #     st.session_state.pto_allowance = 20.0
 
 #####START OF THE APP ########
 init_session_state() # Initialize session state variables
@@ -187,6 +227,7 @@ st.write("Calculate your required office days based on the RTO policy")
 
 #Side bar expanders for PTO inputs
 with st.sidebar:
+    st.title("Start here!")
     # Date range selection
     with st.container():
         st.subheader("Date Range for RTO calculation")
@@ -213,23 +254,23 @@ with st.sidebar:
     with st.expander("PTO days you have in this period", expanded = True):
         total_pto_allowance = st.number_input(
                                     "PTO allowance",
-                                    min_value=20.0,
+                                    min_value=0.0,
                                     max_value=60.0,
                                     value=20.0,
                                     step=0.5,
-                                    key=f"pto_days",
+                                    key="pto_allowance",
                                     help="Enter total PTO allowance for the period, this may include carry-over PTO days"
                                 )
     
     with st.expander("PTO accounting policy", expanded = True):
         pto_accounting_policy = st.radio(
             'Choose how PTO is accounted for', 
-            ['PTO subtract from workdays', 'PTO as a day in office'],
+            ['PTO subtracted from workdays', 'PTO as a day in office'],
             horizontal=True,
             key='pto_accounting_policy', 
             help="""
-            PTO subtracted from work days means total number of work days is reduced by number of PTO you take. 
-            PTO as a day in office means total number of work day is not impacted, but PTO is considered as a day in office.
+            PTO subtracted from work days means the total number of work days are reduced by number of PTO you take. 
+            PTO as a day in office means total number of work day is not impacted, but a PTO is considered as a day in office.
             """
         )
         if st.session_state.pto_accounting_policy != pto_accounting_policy:
@@ -281,7 +322,7 @@ if st.session_state.tab == "Option1: Avg PTO per month":
         # Calculate monthly data
         monthly_data = []
         for month, workdays in monthly_workdays.items():
-            if st.session_state.pto_accounting_policy == 'PTO subtract from workdays':
+            if st.session_state.pto_accounting_policy == 'PTO subtracted from workdays':
                 net_days = workdays - monthly_pto_avg
                 office_days = round(net_days * 0.6, 0)
             else:
