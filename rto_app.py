@@ -111,6 +111,7 @@ def display_metrics_and_charts(monthly_data, monthly_workdays, holidays):
     
     with st.container(border = True):
         st.subheader("✨ Use AI to help for PTO Planning ✨")
+        st.write("AI can make mistake, use the feature judiciously and verify the result.")
         ai_pto_factor = st.radio("Do you want AI to factor in PTO you have already planned (entered)?", 
                 ["Yes, and plan additional PTOs", "No, help me plan from scratch"],
                 key="ai_pto_factor")
