@@ -170,7 +170,6 @@ def show_ai_button(monthly_data, monthly_workdays, holidays, additional_info=Non
              - Total required office days: [Number of days to go into office subtracting the suggested PTO and holidays]
              - Dates to take: [Dates to take PTO to maximize day offs including weekends and holidays]
             """
-            print(prompt)
 
             client = OpenAI(
                 api_key=openai_key
