@@ -381,7 +381,7 @@ elif st.session_state.tab == "Option2: PTO for each month":
             # Calculate monthly data
             monthly_data = []
             for month, workdays in monthly_workdays.items():
-                if st.session_state.pto_accounting_policy == 'PTO subtract from workdays':
+                if st.session_state.pto_accounting_policy == 'PTO subtracted from workdays':
                     net_days = workdays - monthly_pto[month]
                     office_days = round(net_days * 0.6, 0)
                 else:
