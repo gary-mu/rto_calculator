@@ -1,3 +1,4 @@
+import asyncio
 import streamlit as st
 import holidays as hd
 import math
@@ -8,6 +9,7 @@ import plotly.express as px
 from pandas.tseries.holiday import USFederalHolidayCalendar
 from openai import OpenAI
 import os
+from math_tool import calculator_tool
 
 databricks_key = st.secrets['general']["DATABRICKS_API_KEY"]
 openai_key = st.secrets['general']["OPENAI_API_KEY"]
@@ -157,9 +159,10 @@ def display_metrics_and_charts(monthly_data, monthly_workdays, holidays):
         Additional criteria: {st.session_state.ai_pto_additional_criteria}
         """
         pto_allowance=st.session_state.pto_allowance
-        show_ai_button(monthly_data, monthly_workdays, holidays, additional_info, pto_allowance)
+        office_day_formula = required_office_days_formula(st.session_state.pto_accounting_policy)
+        show_ai_button(monthly_data, monthly_workdays, holidays, additional_info, pto_allowance, office_day_formula)
 
-def show_ai_button(monthly_data, monthly_workdays, holidays, additional_info=None, pto_allowance=None):
+def show_ai_button(monthly_data, monthly_workdays, holidays, additional_info=None, pto_allowance=None, office_day_formula=None):
     if st.button("🪄AI Suggest PTO Plan", type='primary'):
         with st.spinner("Thinking...feel free to grab a beverage while you wait"):
             prompt = f"""
@@ -171,19 +174,21 @@ def show_ai_button(monthly_data, monthly_workdays, holidays, additional_info=Non
             Do not suggest day offs between Christmas and New year since this is already a company holiday.
             Also avoid suggesting taking day off for a whole week if I need to take Monday to Friday off using PTOs.
 
-            Remember, office days are 60% of total work days excluding PTOs and holidays.
-
             Here is the monthly data of how many work days, holidays, PTO days and office days required for each month:
-            {monthly_data}
+            {monthly_data}\n
 
             Here are the company holidays during this period:
-            {holidays}
+            {holidays}\n
 
             Here are additional criteria I want you to consider:
-            {additional_info}
+            {additional_info}\n
 
-            Use this format for your suggestions:
-            **Overall summary**: [summary of the strategy]
+            Use this formula to calculate the required office days:\n
+            {office_day_formula}
+
+            Use this format for your suggestions:\n
+            **Overall summary**: \n
+            [summary of the strategy]
 
             PTO strategy by month:
             - Month: [Month]
@@ -192,31 +197,30 @@ def show_ai_button(monthly_data, monthly_workdays, holidays, additional_info=Non
              - Dates to take: [Dates to take PTO to maximize day offs including weekends and holidays]
             """
 
-            client = OpenAI(
-                api_key=openai_key
-            )
-            chat_completion = client.chat.completions.create(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are an AI assistant"
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ],
-                model="gpt-4o",
-                max_tokens=1256
-            )
-            output = chat_completion.choices[0].message.content
+            output = asyncio.run(calculator_tool(prompt))
+            formatted_output = output[-1].content
+            print(formatted_output)
         
-        st.markdown(f"**AI Suggested PTO Plan**:\n {output}")        
+        st.markdown(f"**AI Suggested PTO Plan**:\n {formatted_output}")        
 
 def reset_global_var():
     st.session_state.monthly_data = None
     st.session_state.monthly_workdays = None
     st.session_state.total_pto = 0
+
+def required_office_days_formula(pto_accounting_policy):
+    if pto_accounting_policy == 'PTO subtracted from workdays':
+        formula = """
+        The formula of required office day is: [(Number of workday - PTO days) * 0.6]
+
+        For example, if there are 22 work days, and I take 10 PTO, then required office day is (22-10)*0.6 = 7.2 days
+        """
+    else:
+        formula = """
+        The formula of required office day is: [Number of workday * 0.6 - PTO days] \n
+        For example, if there are 22 work days, and I take 10 PTO, then required office day is 22*0.6 - 10  = 3.2 days\n
+        """
+    return formula
 
 def init_session_state():
     """Initialize session state variables."""
@@ -236,9 +240,6 @@ def init_session_state():
         st.session_state.ai_pto_factor = 'Yes, and plan additional PTOs'
     if 'ai_pto_days' not in st.session_state:
         st.session_state.ai_pto_days = 0
-    if 'extended_christmas_break' not in st.session_state:
-        st.session_state.extended_christmas_break = True
-        extended_christmas_break = st.session_state.extended_christmas_break
 
 
 #####START OF THE APP ########
