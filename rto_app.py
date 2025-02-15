@@ -183,7 +183,7 @@ def show_ai_button(monthly_data, monthly_workdays, holidays, additional_info=Non
             Here are additional criteria I want you to consider:
             {additional_info}\n
 
-            Use this formula to calculate the required office days:\n
+            Use this formula and calculator tool to calculate the required office days:\n
             {office_day_formula}
 
             Use this format for your suggestions:\n
