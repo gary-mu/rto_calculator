@@ -196,6 +196,7 @@ def show_ai_button(monthly_data, monthly_workdays, holidays, additional_info=Non
              - Total required office days: [Number of days to go into office subtracting the suggested PTO and holidays]
              - Dates to take: [Dates to take PTO to maximize day offs including weekends and holidays]
             """
+            print(prompt)
 
             output = asyncio.run(calculator_tool(prompt))
             formatted_output = output[-1].content
@@ -218,7 +219,7 @@ def required_office_days_formula(pto_accounting_policy):
     else:
         formula = """
         The formula of required office day is: [Number of workday * 0.6 - PTO days] \n
-        For example, if there are 22 work days, and I take 10 PTO, then required office day is 22*0.6 - 10  = 3.2 days\n
+        For example, if there are 22 work days, and I take 10 PTO, then required office day is 22*0.6 - 10  = 3.2 days
         """
     return formula
 
