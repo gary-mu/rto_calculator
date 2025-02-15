@@ -196,12 +196,8 @@ def show_ai_button(monthly_data, monthly_workdays, holidays, additional_info=Non
              - Total required office days: [Number of days to go into office subtracting the suggested PTO and holidays]
              - Dates to take: [Dates to take PTO to maximize day offs including weekends and holidays]
             """
-            print(prompt)
-
             output = asyncio.run(calculator_tool(prompt))
-            print(output)
             formatted_output = output[-1].content
-            print(formatted_output)
         
         st.markdown(f"**AI Suggested PTO Plan**:\n {formatted_output}")        
 
