@@ -199,6 +199,7 @@ def show_ai_button(monthly_data, monthly_workdays, holidays, additional_info=Non
             print(prompt)
 
             output = asyncio.run(calculator_tool(prompt))
+            print(output)
             formatted_output = output[-1].content
             print(formatted_output)
         
