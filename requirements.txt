@@ -1,6 +1,9 @@
 asyncio
 datetime
 holidays
+langchain
+langchain_openai
+langgraph
 numexpr
 numpy
 openai
