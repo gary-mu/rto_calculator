@@ -1,7 +1,11 @@
+asyncio
 datetime
 holidays
+numexpr
 numpy
 openai
 pandas
 plotly
 streamlit
+typing
+typing_extensions
