@@ -161,7 +161,6 @@ def display_metrics_and_charts(monthly_data, monthly_workdays, holidays):
                     'Net Work Days': net_days,
                     'Office Days Required': office_days
                 })
-            print(pd.DataFrame(monthly_data))
             
         st.text_input(label="What other criteria do you want AI to consider?",
                     placeholder='eg. I want to take 2 weeks off in July',
