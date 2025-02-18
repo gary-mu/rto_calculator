@@ -133,7 +133,7 @@ def display_metrics_and_charts(monthly_data, monthly_workdays, holidays):
     
     with st.container(border = True):
         st.subheader("✨ Use AI to help for PTO Planning ✨")
-        st.write("AI can make mistake, use the feature judiciously and verify the result.")
+        st.write("AI can make mistake, use the feature carefully and verify the result.")
         ai_pto_factor = st.radio("Do you want AI to factor in PTO you have already planned (entered)?", 
                 ["Yes, and plan additional PTOs", "No, help me plan from scratch"],
                 key="ai_pto_factor")
@@ -146,6 +146,22 @@ def display_metrics_and_charts(monthly_data, monthly_workdays, holidays):
                 step = 0.5, 
                 key="ai_pto_days"
             )
+            monthly_data = []
+            for month, workdays in monthly_workdays.items():
+                if st.session_state.pto_accounting_policy == 'PTO subtracted from workdays':
+                    net_days = workdays
+                    office_days = round(net_days * 0.6, 0)
+                else:
+                    net_days = workdays
+                    office_days = round(net_days * 0.6, 0)
+                monthly_data.append({
+                    'Month': pd.to_datetime(month + "-01").strftime("%b %Y"),
+                    'Work Days': workdays,
+                    'PTO Days': 0,
+                    'Net Work Days': net_days,
+                    'Office Days Required': office_days
+                })
+            print(pd.DataFrame(monthly_data))
             
         st.text_input(label="What other criteria do you want AI to consider?",
                     placeholder='eg. I want to take 2 weeks off in July',
