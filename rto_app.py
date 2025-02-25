@@ -38,6 +38,9 @@ def get_custom_holidays(start_date, end_date, extended_christmas_break):
     if extended_christmas_break:
         christmas_break = pd.date_range(start=f"{year}-12-24", end=f"{year}-12-31")
         christmas_break = christmas_break[~christmas_break.weekday.isin([5, 6])]
+        #exclude Christmas day from the extended break to avoid duplicate
+        christmas = pd.to_datetime(f'{year}-12-25')
+        christmas_break = christmas_break[~christmas_break.isin([christmas])]
 
         for date in christmas_break:
             if start <= date <= end:
@@ -53,8 +56,8 @@ def get_custom_holidays(start_date, end_date, extended_christmas_break):
     holiday_df_sorted = holiday_df.sort_values("Date").reset_index(drop=True)
 
     holiday_result_dict = {
-        'holiday_df': holiday_df,
-        'holiday_dates': holiday_df["Date"]
+        'holiday_df': holiday_df_sorted,
+        'holiday_dates': holiday_df_sorted["Date"]
     }
     return holiday_result_dict
 
