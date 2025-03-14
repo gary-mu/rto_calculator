@@ -1,9 +1,11 @@
+import anthropic
 import math
 from typing import Annotated, Sequence
 import numexpr
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
+from langchain_anthropic import ChatAnthropic
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
@@ -13,6 +15,7 @@ import asyncio
 import streamlit as st
 
 openai_api_key = st.secrets['general']["OPENAI_API_KEY"]
+anthropic_api_key = st.secrets['general']["ANTHROPIC_API_KEY"]
 
 
 @tool
@@ -34,11 +37,14 @@ def calculator(expression: str) -> str:
             local_dict=local_dict,  # add common mathematical functions
         )
     )
+    
 
-
-llm = ChatOpenAI(model="gpt-4o", 
-                 temperature=0, 
-                 openai_api_key = openai_api_key)
+# llm = ChatOpenAI(model="gpt-4o", 
+#                  temperature=0.0, 
+#                  openai_api_key = openai_api_key)
+llm = ChatAnthropic(model_name="claude-3-7-sonnet-20250219", 
+                    temperature=0.0, 
+                    anthropic_api_key = anthropic_api_key)
 tools = [calculator]
 llm_with_tools = llm.bind_tools(tools, tool_choice="any")
 

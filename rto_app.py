@@ -7,12 +7,10 @@ import numpy as np
 from datetime import datetime, timedelta
 import plotly.express as px
 from pandas.tseries.holiday import USFederalHolidayCalendar
-from openai import OpenAI
 import os
 from math_tool import calculator_tool
 
 databricks_key = st.secrets['general']["DATABRICKS_API_KEY"]
-openai_key = st.secrets['general']["OPENAI_API_KEY"]
 
 def get_custom_holidays(start_date, end_date, extended_christmas_break):
     start = pd.to_datetime(start_date)
@@ -203,6 +201,8 @@ def show_ai_button(monthly_data, monthly_workdays, holidays, additional_info=Non
 
             Use this formula and calculator tool to calculate the required office days:\n
             {office_day_formula}
+
+            Think carefully about my additional criteria, understand what it means before you give me suggestions.
 
             Use this format for your suggestions:\n
             **Overall summary**: \n

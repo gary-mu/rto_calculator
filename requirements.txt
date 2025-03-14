@@ -1,7 +1,10 @@
 asyncio
+anthropic
 datetime
 holidays
 langchain
+langchain-anthropic 
+langchain-community
 langchain_openai
 langgraph
 numexpr
