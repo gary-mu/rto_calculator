@@ -36,7 +36,9 @@ def calculator(expression: str) -> str:
     )
 
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0, openai_api_key = openai_api_key)
+llm = ChatOpenAI(model="gpt-4o", 
+                 temperature=0, 
+                 openai_api_key = openai_api_key)
 tools = [calculator]
 llm_with_tools = llm.bind_tools(tools, tool_choice="any")
 
