@@ -151,10 +151,10 @@ def display_metrics_and_charts(monthly_data, monthly_workdays, holidays):
             for month, workdays in monthly_workdays.items():
                 if st.session_state.pto_accounting_policy == 'PTO subtracted from workdays':
                     net_days = workdays
-                    office_days = round(net_days * 0.6, 0)
+                    office_days = math.floor(net_days * 0.6, 0)
                 else:
                     net_days = workdays
-                    office_days = round(net_days * 0.6, 0)
+                    office_days = math.floor(net_days * 0.6, 0)
                 monthly_data.append({
                     'Month': pd.to_datetime(month + "-01").strftime("%b %Y"),
                     'Work Days': workdays,
