@@ -280,7 +280,7 @@ with st.sidebar:
     
     with st.container(border = True):
         st.subheader("RTO policy")
-        st.number_input(
+        rto_policy = st.number_input(
             "% of workdays required in office",
             min_value=0.0,
             max_value=100.0,
@@ -368,10 +368,10 @@ with app_tab:
             for month, workdays in monthly_workdays.items():
                 if st.session_state.pto_accounting_policy == 'PTO subtracted from workdays':
                     net_days = workdays - monthly_pto_avg
-                    office_days = round(net_days * 0.6, 0)
+                    office_days = math.floor(net_days * ( rto_policy * 0.01))
                 else:
                     net_days = workdays
-                    office_days = round(net_days * 0.6, 0) - monthly_pto_avg
+                    office_days = math.floor(net_days * (rto_policy * 0.01)) - monthly_pto_avg
                 monthly_data.append({
                     'Month': pd.to_datetime(month + "-01").strftime("%b %Y"),
                     'Work Days': workdays,
