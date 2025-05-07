@@ -7,7 +7,6 @@ langchain-anthropic
 langchain-community
 langchain_openai
 langgraph
-math
 numexpr
 numpy
 openai
