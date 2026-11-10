@@ -432,20 +432,33 @@ with top_r:
                 help=None if today in workday_set else "Today is not a workday in your period.",
             )
 
-pto_note = f"of {policy.pto_allowance} allowed"
-extra = [plural(summary.sick, "sick day")] if summary.sick else []
-extra += [f"{summary.other} other"] if summary.other else []
-if extra:
-    pto_note += ", plus " + " and ".join(extra)
-ahead = [m for m in summary.months if not m.is_past]
-still_note = f"from {ahead[0].first:%B} on" if ahead and ahead[0].first > policy.start else "in this period"
-if not ahead:
-    still_note = "the period has ended"
+# The four figures are for one month: this one, or the nearest month of the
+# period when today falls outside it.
+if cur is not None:
+    sm = cur
+else:
+    sm = summary.months[0] if today < policy.start else summary.months[-1]
+month_days = [d for d in workday_set if rl.month_key(d) == sm.key]
+logged = [d for d in month_days if d in ss.office and d not in away_days]
+been = sum(1 for d in logged if d <= today)
+planned = len(logged) - been
+leave = sm.pto + sm.sick + sm.other
+if policy.pto_mode == rl.PTO_SUBTRACT:
+    basis = f"{policy.percent:g}% of {sm.workdays - leave} workdays" + (" after leave" if leave else "")
+else:
+    basis = f"{policy.percent:g}% of {sm.workdays} workdays" + (", less leave" if leave else "")
+if sm.required == 0:
+    go_note = "nothing needed this month"
+elif sm.remaining == 0:
+    go_note = "covered, with what you have planned" if planned else "covered"
+else:
+    go_note = f"{plural(sm.left, 'free workday')} left"
+leave_parts = [f"{sm.pto} PTO"] + ([f"{sm.sick} sick"] if sm.sick else []) + ([f"{sm.other} other"] if sm.other else [])
 stats = [
-    ("Required this period", summary.required, f"{policy.percent:g}% of {summary.workdays} workdays, by month"),
-    ("Been in", summary.attended, "days you have logged"),
-    ("Still to go", summary.remaining_ahead, still_note),
-    ("PTO placed", summary.pto, pto_note),
+    (f"Required in {sm.first:%B}", sm.required, basis),
+    ("Been / planned in", f"{been} / {planned}", "days logged so far, and days marked ahead"),
+    ("Still to go", sm.remaining, go_note),
+    ("PTO and leave days", leave, ", ".join(leave_parts) + f". {summary.pto} of {policy.pto_allowance} PTO used this period"),
 ]
 html(
     '<dl class="stats">'
