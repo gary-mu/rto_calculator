@@ -266,6 +266,96 @@ def test_breaks_cover_every_suggested_day():
         assert b.days_off > len(b.pto_dates)
 
 
+# ---------------------------------------------------------------- sick days
+
+
+def test_sick_days_count_like_pto_but_not_against_the_allowance():
+    sick = march(16, 17)
+    s = rl.summarize(Y2026, set(), march(20), JAN1, sick)
+    m = next(x for x in s.months if x.key == "2026-03")
+    assert (m.pto, m.sick) == (1, 2)
+    assert m.required == rl.required_days(22, 3, 60, PTO_SUBTRACT) == 11
+    assert (s.pto, s.sick) == (1, 2)
+    same_as_pto = rl.summarize(Y2026, set(), march(16, 17, 20), JAN1)
+    assert s.required == same_as_pto.required
+
+
+def test_sick_days_as_days_in_office():
+    p = Policy(start=Y2026.start, end=Y2026.end, pto_mode=PTO_AS_OFFICE)
+    s = rl.summarize(p, march(2), set(), date(2026, 3, 9), march(3, 4))
+    m = s.current
+    assert m.required == 13 - 2 and m.remaining == 10
+    assert m.share == pytest.approx(100 * 3 / 22)
+
+
+def test_a_sick_day_is_not_a_free_day_and_beats_an_office_log():
+    s = rl.summarize(Y2026, march(10), set(), date(2026, 3, 9), march(10, 11))
+    m = s.current
+    assert m.attended == 0 and m.sick == 2
+    assert m.left == 17 - 2
+
+
+# ------------------------------------------------- office share and checks
+
+
+@pytest.mark.parametrize(
+    "workdays, pto, attended, mode, expected",
+    [
+        (20, 0, 12, PTO_SUBTRACT, 60.0),
+        (20, 5, 9, PTO_SUBTRACT, 60.0),  # 9 of the 15 days left after PTO
+        (20, 5, 7, PTO_AS_OFFICE, 60.0),  # 7 logged + 5 PTO of 20
+        (20, 0, 0, PTO_SUBTRACT, 0.0),
+        (20, 20, 0, PTO_SUBTRACT, 0.0),  # nothing left to attend
+        (10, 8, 9, PTO_AS_OFFICE, 100.0),  # capped
+    ],
+)
+def test_office_share(workdays, pto, attended, mode, expected):
+    assert rl.office_share(workdays, pto, attended, mode) == pytest.approx(expected)
+
+
+def test_summary_carries_month_and_period_share():
+    s = rl.summarize(Y2026, march(2, 3, 4, 5, 6, 9, 10, 11, 12, 13, 16), set(), date(2026, 3, 17))
+    assert s.current.share == pytest.approx(50.0)  # 11 of 22
+    assert s.share == pytest.approx(100 * 11 / 244)
+
+
+def test_check_pto_keeps_only_free_future_workdays_within_budget():
+    today = date(2026, 6, 10)
+    proposed = [
+        date(2026, 6, 9),  # past
+        date(2026, 6, 13),  # Saturday
+        date(2026, 6, 19),  # Juneteenth
+        date(2026, 6, 12),  # logged in office
+        date(2026, 7, 6),  # already PTO
+        date(2026, 6, 18), date(2026, 6, 22), date(2026, 6, 23),
+    ]
+    checked = rl.check_pto(Y2026, {date(2026, 6, 12)}, {date(2026, 7, 6)}, today, proposed, 2)
+    assert checked.plan.dates == [date(2026, 6, 18), date(2026, 6, 22)]
+    assert len(checked.rejected) == 6
+    assert checked.short_months == []
+    (b,) = checked.plan.breaks
+    assert (b.start, b.end, b.days_off) == (date(2026, 6, 18), date(2026, 6, 22), 5)
+
+
+def test_check_pto_numbers_come_from_the_calculator():
+    today = date(2026, 3, 1)
+    dates = [date(2026, 3, d) for d in (16, 17, 18, 19, 20)]
+    checked = rl.check_pto(Y2026, set(), set(), today, dates, 5)
+    after = rl.summarize(Y2026, set(), set(dates), today)
+    assert checked.plan.remaining_after == after.remaining_ahead
+    assert checked.plan.office_days_saved == 3  # March goes from 13 to 10
+
+
+def test_check_pto_flags_a_month_it_makes_impossible():
+    # Mar 22: 7 free workdays left and 6 more office days needed.
+    logged = march(2, 3, 4, 5, 6, 9, 10)
+    p = Policy(start=date(2026, 3, 1), end=date(2026, 3, 31))
+    dates = [date(2026, 3, d) for d in (23, 24, 25, 26, 27)]
+    checked = rl.check_pto(p, logged, set(), date(2026, 3, 22), dates, 5)
+    ((month, extra),) = checked.short_months
+    assert month.key == "2026-03" and extra == 1
+
+
 # -------------------------------------------------------------- saved state
 
 
@@ -275,19 +365,21 @@ def test_state_round_trip():
         pto_mode=PTO_AS_OFFICE, christmas_break=False, pto_allowance=15,
     )
     raw = rl.dump_state(p, march(2, 3), march(20))
-    policy, office, pto = rl.load_state(raw, date(2026, 3, 1))
-    assert policy == p and office == march(2, 3) and pto == march(20)
+    policy, office, pto, sick = rl.load_state(raw, date(2026, 3, 1))
+    assert policy == p and office == march(2, 3) and pto == march(20) and sick == set()
+    raw = rl.dump_state(p, march(2, 3), march(20), march(4))
+    assert rl.load_state(raw, date(2026, 3, 1))[3] == march(4)
 
 
 @pytest.mark.parametrize("raw", [None, "", "not json", "[1,2]", '{"policy": 4}'])
 def test_unreadable_state_falls_back_to_defaults(raw):
-    policy, office, pto = rl.load_state(raw, date(2026, 3, 1))
+    policy, office, pto, sick = rl.load_state(raw, date(2026, 3, 1))
     assert policy == rl.default_policy(date(2026, 3, 1))
-    assert office == set() and pto == set()
+    assert office == set() and pto == set() and sick == set()
 
 
 def test_bad_entries_in_saved_state_are_dropped():
-    raw = '{"v":1,"policy":{"start":"2026-05-01","end":"2026-01-01"},"office":["2026-03-02","x",5],"pto":["2026-03-02"]}'
-    policy, office, pto = rl.load_state(raw, date(2026, 3, 1))
+    raw = '{"v":1,"policy":{"start":"2026-05-01","end":"2026-01-01"},"office":["2026-03-02","2026-03-03","x",5],"pto":["2026-03-02"],"sick":["2026-03-02","2026-03-03"]}'
+    policy, office, pto, sick = rl.load_state(raw, date(2026, 3, 1))
     assert policy == rl.default_policy(date(2026, 3, 1))  # end before start
-    assert pto == march(2) and office == set()  # PTO wins a clash
+    assert pto == march(2) and sick == march(3) and office == set()  # time off wins a clash

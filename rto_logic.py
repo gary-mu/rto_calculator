@@ -9,6 +9,8 @@ The policy rules are the ones the app has always used:
   workdays, rounded down.
 * PTO is accounted for in one of two ways: it is taken out of the workdays
   before the percentage is applied, or it counts as a day in the office.
+* A sick day is accounted for the same way as a PTO day, but does not use
+  up the PTO allowance.
 """
 
 from __future__ import annotations
@@ -109,6 +111,21 @@ def required_days(workdays: int, pto: int, percent: float, pto_mode: str) -> int
     return max(0, need)
 
 
+def office_share(workdays: int, pto: int, attended: int, pto_mode: str) -> float:
+    """Percent of workdays spent in the office, counted the way the policy counts.
+
+    PTO subtracted from workdays: logged days over the workdays left after PTO.
+    PTO as a day in office: logged days plus PTO days over all workdays.
+    """
+    if pto_mode == PTO_SUBTRACT:
+        base, done = workdays - pto, attended
+    else:
+        base, done = workdays, attended + pto
+    if base <= 0:
+        return 0.0
+    return min(100.0, 100.0 * done / base)
+
+
 @dataclass(frozen=True)
 class MonthSummary:
     key: str  # "2026-11"
@@ -123,6 +140,8 @@ class MonthSummary:
     shortfall: int  # remaining days that no longer fit in the month
     is_past: bool
     is_current: bool
+    share: float = 0.0  # percent of the month's workdays in the office so far
+    sick: int = 0
 
 
 @dataclass(frozen=True)
@@ -136,6 +155,8 @@ class Summary:
     remaining: int
     shortfall: int
     current: MonthSummary | None = None
+    share: float = 0.0  # percent of the period's workdays in the office so far
+    sick: int = 0
 
     @property
     def remaining_ahead(self) -> int:
@@ -152,12 +173,14 @@ def _clean(days, workday_set) -> set[date]:
     return {d for d in days if d in workday_set}
 
 
-def summarize(policy: Policy, office_days, pto_days, today: date) -> Summary:
+def summarize(policy: Policy, office_days, pto_days, today: date, sick_days=()) -> Summary:
     hols = company_holidays(policy.start, policy.end, policy.christmas_break)
     wds = workdays_between(policy.start, policy.end, hols)
     wd_set = set(wds)
     pto = _clean(pto_days, wd_set)
-    office = _clean(office_days, wd_set) - pto
+    sick = _clean(sick_days, wd_set) - pto
+    away = pto | sick
+    office = _clean(office_days, wd_set) - away
 
     by_month: dict[str, list[date]] = {}
     for d in daterange(policy.start, policy.end):
@@ -173,10 +196,12 @@ def summarize(policy: Policy, office_days, pto_days, today: date) -> Summary:
     this_month = month_key(today)
     for key, days in by_month.items():
         m_pto = sum(1 for d in days if d in pto)
+        m_sick = sum(1 for d in days if d in sick)
+        m_away = m_pto + m_sick
         m_att = sum(1 for d in days if d in office)
-        req = required_days(len(days), m_pto, policy.percent, policy.pto_mode)
+        req = required_days(len(days), m_away, policy.percent, policy.pto_mode)
         remaining = max(0, req - m_att)
-        left = sum(1 for d in days if d >= today and d not in pto and d not in office)
+        left = sum(1 for d in days if d >= today and d not in away and d not in office)
         year, month = int(key[:4]), int(key[5:])
         months.append(
             MonthSummary(
@@ -192,6 +217,8 @@ def summarize(policy: Policy, office_days, pto_days, today: date) -> Summary:
                 shortfall=max(0, remaining - left),
                 is_past=key < this_month,
                 is_current=key == this_month,
+                share=office_share(len(days), m_away, m_att, policy.pto_mode),
+                sick=m_sick,
             )
         )
 
@@ -205,6 +232,8 @@ def summarize(policy: Policy, office_days, pto_days, today: date) -> Summary:
         remaining=sum(m.remaining for m in months),
         shortfall=sum(m.shortfall for m in months),
         current=next((m for m in months if m.is_current), None),
+        share=office_share(len(wds), len(away), sum(m.attended for m in months), policy.pto_mode),
+        sick=len(sick),
     )
 
 
@@ -354,11 +383,21 @@ def plan_pto(
     if not dates:
         return plan0
 
-    after = summarize(policy, office_days, set(pto_days) | set(dates), today)
+    return _build_plan(policy, office_days, pto_days, today, dates, budget, before)
+
+
+def _build_plan(policy, office_days, pto_days, today, dates, requested, before=None) -> PtoPlan:
+    """The numbers and breaks for a given set of new PTO dates."""
+    before = before or summarize(policy, office_days, pto_days, today)
+    dates = sorted(dates)
+    years = range(policy.start.year - 1, policy.end.year + 2)
+    off_fixed = set(_holidays_for_years(years, policy.christmas_break))
+    existing = set(pto_days)
+    after = summarize(policy, office_days, existing | set(dates), today)
     chosen = set(dates)
 
     def is_off(d):
-        return d.weekday() >= 5 or d in off_fixed or d in pto or d in chosen
+        return d.weekday() >= 5 or d in off_fixed or d in existing or d in chosen
 
     breaks, seen = [], set()
     for d in dates:
@@ -376,14 +415,53 @@ def plan_pto(
         required_after=after.required,
         remaining_before=before.remaining_ahead,
         remaining_after=after.remaining_ahead,
-        requested=budget,
+        requested=requested,
     )
+
+
+def free_days(policy: Policy, office_days, pto_days, today: date) -> list[date]:
+    """Workdays after today that are neither logged nor already PTO."""
+    hols = company_holidays(policy.start, policy.end, policy.christmas_break)
+    taken = set(office_days) | set(pto_days)
+    return [d for d in workdays_between(policy.start, policy.end, hols) if d > today and d not in taken]
+
+
+@dataclass(frozen=True)
+class CheckedPlan:
+    plan: PtoPlan
+    rejected: list  # proposed dates that are not free future workdays, or over budget
+    short_months: list  # (MonthSummary before, extra days short) for months the plan makes impossible
+
+
+def check_pto(policy: Policy, office_days, pto_days, today: date, proposed, budget: int) -> CheckedPlan:
+    """Check PTO dates that came from somewhere else (a person, a model).
+
+    Keeps only free future workdays, at most `budget` of them, and reports
+    which months the plan would leave without enough free days to meet the
+    policy. The numbers always come from summarize, never from the proposer.
+    """
+    allowed = set(free_days(policy, office_days, pto_days, today))
+    keep, rejected = [], []
+    for d in sorted(set(proposed)):
+        if d in allowed and len(keep) < max(0, budget):
+            keep.append(d)
+        else:
+            rejected.append(d)
+    before = summarize(policy, office_days, pto_days, today)
+    plan = _build_plan(policy, office_days, pto_days, today, keep, budget, before)
+    after = summarize(policy, office_days, set(pto_days) | set(keep), today)
+    short = [
+        (b, a.shortfall - b.shortfall)
+        for b, a in zip(before.months, after.months)
+        if a.shortfall > b.shortfall
+    ]
+    return CheckedPlan(plan=plan, rejected=rejected, short_months=short)
 
 
 # ------------------------------------------------------------- saved state
 
 
-def dump_state(policy: Policy, office_days, pto_days) -> str:
+def dump_state(policy: Policy, office_days, pto_days, sick_days=()) -> str:
     return json.dumps(
         {
             "v": STATE_VERSION,
@@ -397,6 +475,7 @@ def dump_state(policy: Policy, office_days, pto_days) -> str:
             },
             "office": sorted(d.isoformat() for d in office_days),
             "pto": sorted(d.isoformat() for d in pto_days),
+            "sick": sorted(d.isoformat() for d in sick_days),
         },
         separators=(",", ":"),
     )
@@ -415,7 +494,7 @@ def _dates(items) -> set[date]:
 def load_state(raw, today: date):
     """Read saved state. Anything unreadable falls back to the defaults.
 
-    Returns (policy, office_days, pto_days).
+    Returns (policy, office_days, pto_days, sick_days).
     """
     base = default_policy(today)
     try:
@@ -423,7 +502,7 @@ def load_state(raw, today: date):
         if not isinstance(data, dict):
             raise ValueError
     except (TypeError, ValueError):
-        return base, set(), set()
+        return base, set(), set(), set()
     p = data.get("policy")
     if not isinstance(p, dict):
         p = {}
@@ -439,5 +518,6 @@ def load_state(raw, today: date):
     except (TypeError, ValueError):
         policy = base
     pto = _dates(data.get("pto"))
-    office = _dates(data.get("office")) - pto
-    return policy, office, pto
+    sick = _dates(data.get("sick")) - pto
+    office = _dates(data.get("office")) - pto - sick
+    return policy, office, pto, sick

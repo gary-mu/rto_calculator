@@ -1,23 +1,22 @@
-# Hallmark theme: Dose. These hex values mirror the tokens in theme/tokens.css.
+# Hallmark theme: Dusk. These hex values mirror the tokens in theme/tokens.css.
 [theme]
-base = "light"
-primaryColor = "#007948"
-backgroundColor = "#faf7ef"
-secondaryBackgroundColor = "#e9f8ef"
-textColor = "#0c1c16"
-linkColor = "#007948"
-borderColor = "#54655d"
-font = "'Instrument Sans', ui-sans-serif, sans-serif"
-headingFont = "'Schibsted Grotesk', ui-sans-serif, sans-serif"
-codeFont = "'DM Mono', ui-monospace, monospace"
+base = "dark"
+primaryColor = "#a0b0f4"
+backgroundColor = "#0e1017"
+secondaryBackgroundColor = "#1e212a"
+textColor = "#f4f1ed"
+linkColor = "#a0b0f4"
+borderColor = "#999fa9"
+font = "'Wix Madefor Text', ui-sans-serif, system-ui, sans-serif"
+headingFont = "'Wix Madefor Display', ui-sans-serif, system-ui, sans-serif"
 baseFontSize = 16
 baseRadius = "10px"
 showWidgetBorder = true
 showSidebarBorder = true
 
 [theme.sidebar]
-backgroundColor = "#e9f8ef"
-secondaryBackgroundColor = "#faf7ef"
+backgroundColor = "#151820"
+secondaryBackgroundColor = "#1e212a"
 
 [client]
 toolbarMode = "minimal"
