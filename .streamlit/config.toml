@@ -1,22 +1,11 @@
-# Hallmark theme: Dusk. These hex values mirror the tokens in theme/tokens.css.
+# The look lives in themes.py and theme/*.css, which the person can switch at
+# run time. This file only gives Streamlit a neutral starting point.
 [theme]
-base = "dark"
-primaryColor = "#a0b0f4"
-backgroundColor = "#0e1017"
-secondaryBackgroundColor = "#1e212a"
-textColor = "#f4f1ed"
-linkColor = "#a0b0f4"
-borderColor = "#999fa9"
-font = "'Wix Madefor Text', ui-sans-serif, system-ui, sans-serif"
-headingFont = "'Wix Madefor Display', ui-sans-serif, system-ui, sans-serif"
+base = "light"
 baseFontSize = 16
-baseRadius = "10px"
+baseRadius = "8px"
 showWidgetBorder = true
 showSidebarBorder = true
-
-[theme.sidebar]
-backgroundColor = "#151820"
-secondaryBackgroundColor = "#1e212a"
 
 [client]
 toolbarMode = "minimal"

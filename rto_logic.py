@@ -9,12 +9,15 @@ The policy rules are the ones the app has always used:
   workdays, rounded down.
 * PTO is accounted for in one of two ways: it is taken out of the workdays
   before the percentage is applied, or it counts as a day in the office.
-* A sick day is accounted for the same way as a PTO day, but does not use
-  up the PTO allowance.
+* A sick day or another absence is accounted for the same way as a PTO day,
+  but does not use up the PTO allowance.
+* The holiday list can be replaced with the person's own.
 """
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import math
 from dataclasses import dataclass, field
@@ -41,6 +44,8 @@ class Policy:
     pto_mode: str = PTO_SUBTRACT
     christmas_break: bool = True
     pto_allowance: int = 20
+    # ((date, name), ...) replaces the built-in US list when set.
+    custom_holidays: tuple | None = None
 
     def __post_init__(self):
         if self.end < self.start:
@@ -81,6 +86,52 @@ def company_holidays(start: date, end: date, christmas_break: bool = True) -> di
     """Holidays that fall inside the period, in date order."""
     every = _holidays_for_years(range(start.year, end.year + 1), christmas_break)
     return {d: every[d] for d in sorted(every) if start <= d <= end}
+
+
+def policy_holidays(policy: Policy) -> dict[date, str]:
+    """The holidays in force for a policy: the person's own list if they set one."""
+    if policy.custom_holidays is None:
+        return company_holidays(policy.start, policy.end, policy.christmas_break)
+    return {d: name for d, name in sorted(policy.custom_holidays) if policy.start <= d <= policy.end}
+
+
+def _off_fixed(policy: Policy) -> set[date]:
+    """Holidays in and around the period, for measuring stretches off."""
+    if policy.custom_holidays is not None:
+        return {d for d, _ in policy.custom_holidays}
+    years = range(policy.start.year - 1, policy.end.year + 2)
+    return set(_holidays_for_years(years, policy.christmas_break))
+
+
+def parse_holiday_csv(text: str):
+    """Read 'date,name' rows. Dates as 2026-07-03 or 7/3/2026; a header row is fine.
+
+    Returns ({date: name}, number of rows that could not be read).
+    """
+    found: dict[date, str] = {}
+    bad = 0
+    for row in csv.reader(io.StringIO(text)):
+        cells = [c.strip() for c in row]
+        if not cells or not any(cells):
+            continue
+        raw, name = cells[0], (cells[1] if len(cells) > 1 else "")
+        d = None
+        try:
+            d = date.fromisoformat(raw)
+        except ValueError:
+            parts = raw.replace("-", "/").split("/")
+            if len(parts) == 3 and all(x.isdigit() for x in parts):
+                m, dd, y = (int(x) for x in parts)
+                try:
+                    d = date(y if y > 99 else 2000 + y, m, dd)
+                except ValueError:
+                    d = None
+        if d is None:
+            if raw.lower() not in ("date", "day"):
+                bad += 1
+            continue
+        found[d] = name or "Company holiday"
+    return dict(sorted(found.items())), bad
 
 
 def daterange(start: date, end: date):
@@ -142,6 +193,7 @@ class MonthSummary:
     is_current: bool
     share: float = 0.0  # percent of the month's workdays in the office so far
     sick: int = 0
+    other: int = 0
 
 
 @dataclass(frozen=True)
@@ -157,6 +209,7 @@ class Summary:
     current: MonthSummary | None = None
     share: float = 0.0  # percent of the period's workdays in the office so far
     sick: int = 0
+    other: int = 0
 
     @property
     def remaining_ahead(self) -> int:
@@ -173,13 +226,14 @@ def _clean(days, workday_set) -> set[date]:
     return {d for d in days if d in workday_set}
 
 
-def summarize(policy: Policy, office_days, pto_days, today: date, sick_days=()) -> Summary:
-    hols = company_holidays(policy.start, policy.end, policy.christmas_break)
+def summarize(policy: Policy, office_days, pto_days, today: date, sick_days=(), other_days=()) -> Summary:
+    hols = policy_holidays(policy)
     wds = workdays_between(policy.start, policy.end, hols)
     wd_set = set(wds)
     pto = _clean(pto_days, wd_set)
     sick = _clean(sick_days, wd_set) - pto
-    away = pto | sick
+    other = _clean(other_days, wd_set) - pto - sick
+    away = pto | sick | other
     office = _clean(office_days, wd_set) - away
 
     by_month: dict[str, list[date]] = {}
@@ -197,7 +251,8 @@ def summarize(policy: Policy, office_days, pto_days, today: date, sick_days=()) 
     for key, days in by_month.items():
         m_pto = sum(1 for d in days if d in pto)
         m_sick = sum(1 for d in days if d in sick)
-        m_away = m_pto + m_sick
+        m_other = sum(1 for d in days if d in other)
+        m_away = m_pto + m_sick + m_other
         m_att = sum(1 for d in days if d in office)
         req = required_days(len(days), m_away, policy.percent, policy.pto_mode)
         remaining = max(0, req - m_att)
@@ -219,6 +274,7 @@ def summarize(policy: Policy, office_days, pto_days, today: date, sick_days=()) 
                 is_current=key == this_month,
                 share=office_share(len(days), m_away, m_att, policy.pto_mode),
                 sick=m_sick,
+                other=m_other,
             )
         )
 
@@ -234,6 +290,7 @@ def summarize(policy: Policy, office_days, pto_days, today: date, sick_days=()) 
         current=next((m for m in months if m.is_current), None),
         share=office_share(len(wds), len(away), sum(m.attended for m in months), policy.pto_mode),
         sick=len(sick),
+        other=len(other),
     )
 
 
@@ -338,9 +395,8 @@ def plan_pto(
     if budget <= 0:
         return plan0
 
-    years = range(policy.start.year - 1, policy.end.year + 2)
-    off_fixed = set(_holidays_for_years(years, policy.christmas_break))
-    hols = company_holidays(policy.start, policy.end, policy.christmas_break)
+    off_fixed = _off_fixed(policy)
+    hols = policy_holidays(policy)
     wds = workdays_between(policy.start, policy.end, hols)
     wd_set = set(wds)
     pto = _clean(pto_days, wd_set)
@@ -390,8 +446,7 @@ def _build_plan(policy, office_days, pto_days, today, dates, requested, before=N
     """The numbers and breaks for a given set of new PTO dates."""
     before = before or summarize(policy, office_days, pto_days, today)
     dates = sorted(dates)
-    years = range(policy.start.year - 1, policy.end.year + 2)
-    off_fixed = set(_holidays_for_years(years, policy.christmas_break))
+    off_fixed = _off_fixed(policy)
     existing = set(pto_days)
     after = summarize(policy, office_days, existing | set(dates), today)
     chosen = set(dates)
@@ -421,7 +476,7 @@ def _build_plan(policy, office_days, pto_days, today, dates, requested, before=N
 
 def free_days(policy: Policy, office_days, pto_days, today: date) -> list[date]:
     """Workdays after today that are neither logged nor already PTO."""
-    hols = company_holidays(policy.start, policy.end, policy.christmas_break)
+    hols = policy_holidays(policy)
     taken = set(office_days) | set(pto_days)
     return [d for d in workdays_between(policy.start, policy.end, hols) if d > today and d not in taken]
 
@@ -461,7 +516,7 @@ def check_pto(policy: Policy, office_days, pto_days, today: date, proposed, budg
 # ------------------------------------------------------------- saved state
 
 
-def dump_state(policy: Policy, office_days, pto_days, sick_days=()) -> str:
+def dump_state(policy: Policy, office_days, pto_days, sick_days=(), other_days=(), ui=None) -> str:
     return json.dumps(
         {
             "v": STATE_VERSION,
@@ -472,10 +527,16 @@ def dump_state(policy: Policy, office_days, pto_days, sick_days=()) -> str:
                 "pto_mode": policy.pto_mode,
                 "christmas_break": policy.christmas_break,
                 "pto_allowance": policy.pto_allowance,
+                "holidays": (
+                    None if policy.custom_holidays is None
+                    else [[d.isoformat(), name] for d, name in sorted(policy.custom_holidays)]
+                ),
             },
             "office": sorted(d.isoformat() for d in office_days),
             "pto": sorted(d.isoformat() for d in pto_days),
             "sick": sorted(d.isoformat() for d in sick_days),
+            "other": sorted(d.isoformat() for d in other_days),
+            "ui": ui or {},
         },
         separators=(",", ":"),
     )
@@ -491,10 +552,22 @@ def _dates(items) -> set[date]:
     return out
 
 
+def _holiday_pairs(items):
+    if not isinstance(items, list):
+        return None
+    out = {}
+    for item in items:
+        try:
+            out[date.fromisoformat(item[0])] = str(item[1])[:80]
+        except (TypeError, ValueError, IndexError):
+            continue
+    return tuple(sorted(out.items()))
+
+
 def load_state(raw, today: date):
     """Read saved state. Anything unreadable falls back to the defaults.
 
-    Returns (policy, office_days, pto_days, sick_days).
+    Returns a dict: policy, office, pto, sick, other (sets of dates) and ui.
     """
     base = default_policy(today)
     try:
@@ -502,7 +575,7 @@ def load_state(raw, today: date):
         if not isinstance(data, dict):
             raise ValueError
     except (TypeError, ValueError):
-        return base, set(), set(), set()
+        return {"policy": base, "office": set(), "pto": set(), "sick": set(), "other": set(), "ui": {}}
     p = data.get("policy")
     if not isinstance(p, dict):
         p = {}
@@ -514,10 +587,13 @@ def load_state(raw, today: date):
             pto_mode=p.get("pto_mode", base.pto_mode),
             christmas_break=bool(p.get("christmas_break", base.christmas_break)),
             pto_allowance=int(p.get("pto_allowance", base.pto_allowance)),
+            custom_holidays=_holiday_pairs(p.get("holidays")),
         )
     except (TypeError, ValueError):
         policy = base
     pto = _dates(data.get("pto"))
     sick = _dates(data.get("sick")) - pto
-    office = _dates(data.get("office")) - pto - sick
-    return policy, office, pto, sick
+    other = _dates(data.get("other")) - pto - sick
+    office = _dates(data.get("office")) - pto - sick - other
+    ui = data.get("ui") if isinstance(data.get("ui"), dict) else {}
+    return {"policy": policy, "office": office, "pto": pto, "sick": sick, "other": other, "ui": ui}

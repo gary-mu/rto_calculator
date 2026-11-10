@@ -1,0 +1,66 @@
+/* The calendar pane. Lives in the component's own frame; the tokens are sent in with it. */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; overflow-x: clip; background: transparent; }
+body { font-family: var(--font-body); color: var(--color-ink); font-size: var(--text-md); line-height: 1.4; -webkit-font-smoothing: antialiased; }
+button { font: inherit; color: inherit; border: 0; background: none; padding: 0; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+.pane { position: relative; padding: var(--space-md); border-radius: var(--radius-card); background: var(--color-surface); box-shadow: inset 0 0 0 1px var(--color-rule); }
+.grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--space-sm); }
+.head { margin-block-end: var(--space-sm); }
+.head span { font-size: var(--text-sm); font-weight: 500; color: var(--color-muted); text-align: center; }
+.gap { min-height: var(--tray-key); }
+
+.day {
+  position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-3xs);
+  min-height: var(--tray-key); min-width: 0; border-radius: var(--radius-inner);
+  background: var(--color-key); color: var(--color-ink); box-shadow: inset 0 0 0 1px var(--color-rule);
+  font-weight: 500; font-variant-numeric: tabular-nums;
+  transition: background-color var(--dur-micro) var(--ease-out);
+}
+.day:hover, .day.is-open { background: var(--color-key-hover); }
+.day .n { display: flex; align-items: center; gap: var(--space-xs); font-size: var(--text-lg); line-height: 1.1; }
+.day .what { font-size: var(--text-xs); font-weight: 500; line-height: 1.2; max-width: 100%; padding-inline: var(--space-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.day svg { inline-size: 18px; block-size: 18px; flex: none; }
+.day[data-state="in"], .day[data-state="in"]:hover { background: var(--color-mark-in); color: var(--color-mark-in-ink); box-shadow: none; }
+.day[data-state="pto"], .day[data-state="pto"]:hover { background: var(--color-mark-pto); color: var(--color-mark-pto-ink); box-shadow: none; }
+.day[data-state="sick"], .day[data-state="sick"]:hover { background: var(--color-mark-sick); color: var(--color-mark-sick-ink); box-shadow: none; }
+.day[data-state="other"], .day[data-state="other"]:hover { background: var(--color-mark-other); color: var(--color-mark-other-ink); box-shadow: none; }
+.day[data-state="hol"] { background: transparent; color: var(--color-ink-2); box-shadow: inset 0 0 0 1px var(--color-edge); cursor: help; background-image: repeating-linear-gradient(135deg, transparent 0 7px, var(--color-rule) 7px 8px); }
+.day.is-today { outline: 2px solid var(--color-ink); outline-offset: 2px; }
+.day.is-today:focus-visible { outline-color: var(--color-focus); }
+
+/* the wheel: four marks around the day, clear in the middle */
+.wheel { position: absolute; inline-size: var(--wheel); block-size: var(--wheel); z-index: var(--z-dropdown); pointer-events: none; transition: opacity var(--dur-micro) var(--ease-out), transform var(--dur-short) var(--ease-out); }
+.js .wheel:not(.is-open) { opacity: 0; transform: scale(0.82); }
+.wheel.is-open button { pointer-events: auto; }
+.wheel::before { content: ""; position: absolute; inset: 0; border-radius: 50%; background: color-mix(in oklab, var(--color-surface) 88%, transparent); box-shadow: inset 0 0 0 1px var(--color-edge), 0 18px 40px -18px color-mix(in oklab, var(--color-ink) 55%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.wheel button { position: absolute; inline-size: var(--wheel-opt); block-size: var(--wheel-opt); border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-3xs); font-size: var(--text-xs); font-weight: 600; line-height: 1; transition: transform var(--dur-micro) var(--ease-out); }
+.wheel button svg { inline-size: 20px; block-size: 20px; }
+.wheel button:hover, .wheel button:focus-visible { transform: scale(1.1); }
+.wheel button:active { transform: scale(0.96); }
+.wheel [data-mark="in"] { inset-block-start: var(--space-xs); inset-inline-start: calc(50% - var(--wheel-opt) / 2); background: var(--color-mark-in); color: var(--color-mark-in-ink); }
+.wheel [data-mark="pto"] { inset-inline-end: var(--space-xs); inset-block-start: calc(50% - var(--wheel-opt) / 2); background: var(--color-mark-pto); color: var(--color-mark-pto-ink); }
+.wheel [data-mark="sick"] { inset-block-end: var(--space-xs); inset-inline-start: calc(50% - var(--wheel-opt) / 2); background: var(--color-mark-sick); color: var(--color-mark-sick-ink); }
+.wheel [data-mark="other"] { inset-inline-start: var(--space-xs); inset-block-start: calc(50% - var(--wheel-opt) / 2); background: var(--color-mark-other); color: var(--color-mark-other-ink); }
+.wheel [data-mark="clear"] { inset-block-start: calc(50% - 22px); inset-inline-start: calc(50% - 22px); inline-size: 44px; block-size: 44px; background: var(--color-key); color: var(--color-ink); box-shadow: inset 0 0 0 1px var(--color-edge); }
+.wheel [data-mark="clear"][aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+.wheel button[aria-checked="true"] { box-shadow: 0 0 0 2px var(--color-surface), 0 0 0 4px var(--color-ink); }
+
+/* a holiday's name, on hover or focus */
+.tip { position: absolute; z-index: var(--z-tooltip); max-width: 240px; padding: var(--space-xs) var(--space-sm); border-radius: var(--radius-inner); background: var(--color-ink); color: var(--color-paper); font-size: var(--text-sm); font-weight: 500; pointer-events: none; transition: opacity var(--dur-micro) var(--ease-out); }
+.js .tip:not(.is-open) { opacity: 0; }
+
+@media (max-width: 34rem) {
+  .pane { padding: var(--space-xs); }
+  .grid { gap: var(--space-2xs); }
+  .day .what { display: none; }
+  .day .n { font-size: var(--text-md); gap: var(--space-2xs); }
+  .day svg { inline-size: 14px; block-size: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wheel, .wheel button, .tip, .day { transition: none; }
+  .wheel { transform: none; }
+  .wheel button:hover, .wheel button:focus-visible, .wheel button:active { transform: none; }
+}

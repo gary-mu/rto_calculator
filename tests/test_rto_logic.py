@@ -363,23 +363,83 @@ def test_state_round_trip():
     p = Policy(
         start=date(2026, 1, 1), end=date(2026, 6, 30), percent=50.0,
         pto_mode=PTO_AS_OFFICE, christmas_break=False, pto_allowance=15,
+        custom_holidays=((date(2026, 3, 17), "Founders Day"),),
     )
-    raw = rl.dump_state(p, march(2, 3), march(20))
-    policy, office, pto, sick = rl.load_state(raw, date(2026, 3, 1))
-    assert policy == p and office == march(2, 3) and pto == march(20) and sick == set()
-    raw = rl.dump_state(p, march(2, 3), march(20), march(4))
-    assert rl.load_state(raw, date(2026, 3, 1))[3] == march(4)
+    raw = rl.dump_state(p, march(2, 3), march(20), march(4), march(5), {"theme": "garden", "mode": "dark"})
+    got = rl.load_state(raw, date(2026, 3, 1))
+    assert got["policy"] == p
+    assert (got["office"], got["pto"], got["sick"], got["other"]) == (march(2, 3), march(20), march(4), march(5))
+    assert got["ui"] == {"theme": "garden", "mode": "dark"}
 
 
 @pytest.mark.parametrize("raw", [None, "", "not json", "[1,2]", '{"policy": 4}'])
 def test_unreadable_state_falls_back_to_defaults(raw):
-    policy, office, pto, sick = rl.load_state(raw, date(2026, 3, 1))
-    assert policy == rl.default_policy(date(2026, 3, 1))
-    assert office == set() and pto == set() and sick == set()
+    got = rl.load_state(raw, date(2026, 3, 1))
+    assert got["policy"] == rl.default_policy(date(2026, 3, 1))
+    assert not (got["office"] or got["pto"] or got["sick"] or got["other"] or got["ui"])
 
 
 def test_bad_entries_in_saved_state_are_dropped():
-    raw = '{"v":1,"policy":{"start":"2026-05-01","end":"2026-01-01"},"office":["2026-03-02","2026-03-03","x",5],"pto":["2026-03-02"],"sick":["2026-03-02","2026-03-03"]}'
-    policy, office, pto, sick = rl.load_state(raw, date(2026, 3, 1))
-    assert policy == rl.default_policy(date(2026, 3, 1))  # end before start
-    assert pto == march(2) and sick == march(3) and office == set()  # time off wins a clash
+    raw = (
+        '{"v":1,"policy":{"start":"2026-05-01","end":"2026-01-01"},'
+        '"office":["2026-03-02","2026-03-03","2026-03-04","x",5],"pto":["2026-03-02"],'
+        '"sick":["2026-03-02","2026-03-03"],"other":["2026-03-03","2026-03-04"],"ui":7}'
+    )
+    got = rl.load_state(raw, date(2026, 3, 1))
+    assert got["policy"] == rl.default_policy(date(2026, 3, 1))  # end before start
+    # time off wins a clash, in the order PTO, sick, other
+    assert (got["pto"], got["sick"], got["other"], got["office"]) == (march(2), march(3), march(4), set())
+    assert got["ui"] == {}
+
+
+def test_state_saved_before_holidays_and_other_absence_still_loads():
+    raw = '{"v":1,"policy":{"start":"2026-01-01","end":"2026-12-31"},"office":["2026-03-02"],"pto":[]}'
+    got = rl.load_state(raw, date(2026, 3, 1))
+    assert got["policy"].custom_holidays is None and got["office"] == march(2)
+
+
+# -------------------------------------------- other absence, own holidays
+
+
+def test_other_absence_counts_like_sick_and_pto():
+    s = rl.summarize(Y2026, set(), march(20), JAN1, march(16), march(17, 18))
+    m = next(x for x in s.months if x.key == "2026-03")
+    assert (m.pto, m.sick, m.other) == (1, 1, 2)
+    assert m.required == rl.required_days(22, 4, 60, PTO_SUBTRACT)
+    assert (s.pto, s.sick, s.other) == (1, 1, 2)
+
+
+def test_own_holiday_list_replaces_the_built_in_one():
+    own = ((date(2026, 3, 17), "Founders Day"), (date(2027, 1, 4), "Outside the period"))
+    p = Policy(start=Y2026.start, end=Y2026.end, custom_holidays=own)
+    assert rl.policy_holidays(p) == {date(2026, 3, 17): "Founders Day"}
+    s = rl.summarize(p, set(), set(), JAN1)
+    assert s.workdays == 261 - 1  # every weekday of 2026 but one
+    m = next(x for x in s.months if x.key == "2026-03")
+    assert (m.workdays, m.holidays) == (21, 1)
+    assert rl.policy_holidays(Y2026) == rl.company_holidays(Y2026.start, Y2026.end, True)
+
+
+def test_an_empty_own_list_means_no_holidays():
+    p = Policy(start=Y2026.start, end=Y2026.end, custom_holidays=())
+    assert rl.policy_holidays(p) == {}
+    assert rl.summarize(p, set(), set(), JAN1).workdays == 261
+
+
+def test_planner_bridges_an_own_holiday():
+    own = ((date(2026, 3, 19), "Founders Day"),)  # a Thursday
+    p = Policy(start=date(2026, 3, 1), end=date(2026, 3, 31), pto_mode=PTO_AS_OFFICE, custom_holidays=own)
+    plan = rl.plan_pto(p, set(), set(), date(2026, 2, 28), 1)
+    assert plan.dates == [date(2026, 3, 20)]
+    assert plan.breaks[0].days_off == 4
+
+
+def test_parse_holiday_csv():
+    text = "Date,Holiday Name\n2026-07-03,Independence Day (observed)\n11/26/2026,Thanksgiving\n\nnot a date,x\n2026-12-25\n"
+    found, bad = rl.parse_holiday_csv(text)
+    assert found == {
+        date(2026, 7, 3): "Independence Day (observed)",
+        date(2026, 11, 26): "Thanksgiving",
+        date(2026, 12, 25): "Company holiday",
+    }
+    assert bad == 1

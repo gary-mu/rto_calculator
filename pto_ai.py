@@ -64,7 +64,7 @@ class Suggestion:
 def build_context(policy: rl.Policy, office_days, pto_days, today: date, budget: int,
                   max_pto_per_break: int, wishes: str) -> dict:
     summary = rl.summarize(policy, office_days, pto_days, today)
-    holidays = rl.company_holidays(policy.start, policy.end, policy.christmas_break)
+    holidays = rl.policy_holidays(policy)
     baseline = rl.plan_pto(policy, office_days, pto_days, today, budget, max_pto_per_break)
     if policy.pto_mode == rl.PTO_SUBTRACT:
         rule = (

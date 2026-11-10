@@ -1,10 +1,12 @@
 """RTO calculator: how many days you need in the office, how many you have
 done, and where to put PTO. The sums live in rto_logic.py; the AI planner
-in pto_ai.py only proposes dates."""
+in pto_ai.py only proposes dates; the look lives in themes.py and theme/."""
 
 from __future__ import annotations
 
 import calendar
+import csv
+import io
 import os
 from datetime import date
 from html import escape
@@ -15,30 +17,41 @@ import streamlit.components.v1 as components
 
 import pto_ai
 import rto_logic as rl
+import themes
 
 ROOT = Path(__file__).parent
 MODE_LABELS = {
     rl.PTO_SUBTRACT: "PTO subtracted from workdays",
     rl.PTO_AS_OFFICE: "PTO as a day in office",
 }
-MARK_OFFICE, MARK_PTO, MARK_SICK = "In office", "PTO", "Sick day"
+MARKS = ("in", "pto", "sick", "other")  # what the calendar's wheel can set
 AI_CALLS_PER_VISIT = 5
 
 st.set_page_config(page_title="RTO calculator", page_icon=":material/calendar_month:", layout="wide")
 
 day_store = components.declare_component("day_store", path=str(ROOT / "components" / "day_store"))
+month_tray = components.declare_component("month_tray", path=str(ROOT / "components" / "month_tray"))
 ss = st.session_state
 
 
 # ------------------------------------------------------------------ helpers
 
 
-def load_css() -> str:
-    app = (ROOT / "theme" / "app.css").read_text()
-    head, _, body = app.partition("/* --- app --- */")
-    tokens = (ROOT / "theme" / "tokens.css").read_text()
-    base = (ROOT / "theme" / "base.css").read_text()
-    return f"{head}\n{tokens}\n{base}\n{body}"
+def _read(name: str) -> str:
+    return (ROOT / "theme" / name).read_text()
+
+
+def page_css(theme: str, mode: str) -> str:
+    stamp, _, body = _read("app.css").partition("/* --- app --- */")
+    return "\n".join(
+        [stamp, themes.font_import(theme), themes.root_block(theme, mode), _read("tokens.css"), _read("base.css"), body]
+    )
+
+
+def tray_css(theme: str, mode: str) -> str:
+    return "\n".join(
+        [themes.font_import(theme), themes.root_block(theme, mode), _read("tokens.css"), _read("tray.css")]
+    )
 
 
 def html(markup: str):
@@ -55,6 +68,10 @@ def fmt_month(d: date) -> str:
 
 def plural(n: int, word: str) -> str:
     return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def day_sets() -> dict:
+    return {"in": ss.office, "pto": ss.pto, "sick": ss.sick, "other": ss.other}
 
 
 def planner_key():
@@ -120,19 +137,25 @@ def plan_line(plan: rl.PtoPlan) -> str:
     )
 
 
-def apply_state(policy: rl.Policy, office: set, pto: set, sick: set = frozenset()):
-    """Put a policy and its days into the session, widgets included."""
-    ss.office, ss.pto, ss.sick = set(office), set(pto), set(sick)
+def apply_state(state: dict):
+    """Put a saved state into the session, widgets included."""
+    policy = state["policy"]
+    ss.office, ss.pto = set(state["office"]), set(state["pto"])
+    ss.sick, ss.other = set(state["sick"]), set(state["other"])
+    ss.custom_hols = None if policy.custom_holidays is None else dict(policy.custom_holidays)
     ss.p_start, ss.p_end = policy.start, policy.end
     ss.workdays_percentage = float(policy.percent)
     ss.pto_accounting_policy = MODE_LABELS[policy.pto_mode]
     ss.extended_christmas_break = policy.christmas_break
     ss.pto_allowance = int(policy.pto_allowance)
     ss.valid_policy = policy
+    ui = state.get("ui") or {}
+    ss.ui_theme, ss.ui_mode = themes.normalise(ui.get("theme"), ui.get("mode"))
 
 
 def current_policy() -> rl.Policy:
     """The policy in the sidebar; the last valid one if the dates are wrong."""
+    custom = ss.get("custom_hols")
     try:
         policy = rl.Policy(
             start=ss.p_start,
@@ -141,6 +164,7 @@ def current_policy() -> rl.Policy:
             pto_mode=next(k for k, v in MODE_LABELS.items() if v == ss.pto_accounting_policy),
             christmas_break=bool(ss.extended_christmas_break),
             pto_allowance=int(ss.pto_allowance),
+            custom_holidays=None if custom is None else tuple(sorted(custom.items())),
         )
     except (ValueError, TypeError, StopIteration):
         ss.policy_error = True
@@ -150,28 +174,21 @@ def current_policy() -> rl.Policy:
     return policy
 
 
+def saved_payload() -> str:
+    return rl.dump_state(
+        current_policy(), ss.office, ss.pto, ss.sick, ss.other, {"theme": ss.ui_theme, "mode": ss.ui_mode}
+    )
+
+
 # ---------------------------------------------------------------- callbacks
 
 
-def toggle_day(d: date):
-    sets = {MARK_OFFICE: ss.office, MARK_PTO: ss.pto, MARK_SICK: ss.sick}
-    mine = sets.get(ss.get("mark_mode"), ss.office)
-    if d in mine:
-        mine.discard(d)
-        return
-    for other in sets.values():
-        other.discard(d)
-    mine.add(d)
-
-
-def log_today(d: date):
-    ss.office.add(d)
-    ss.pto.discard(d)
-    ss.sick.discard(d)
-
-
-def undo_today(d: date):
-    ss.office.discard(d)
+def mark_day(d: date, mark: str):
+    """Set a day to one mark, or clear it."""
+    for days in day_sets().values():
+        days.discard(d)
+    if mark in MARKS:
+        day_sets()[mark].add(d)
 
 
 def shift_month(step: int):
@@ -180,9 +197,8 @@ def shift_month(step: int):
 
 
 def add_plan(dates):
-    ss.pto.update(dates)
-    ss.office.difference_update(dates)
-    ss.sick.difference_update(dates)
+    for d in dates:
+        mark_day(d, "pto")
     ss.ai_plan = None
 
 
@@ -195,7 +211,8 @@ def ask_ai(policy, today, budget, cap):
         ss.ai_error = f"That is {AI_CALLS_PER_VISIT} AI plans this visit, which is the limit. The quick plan still works."
         return
     ss.ai_calls = ss.get("ai_calls", 0) + 1
-    context = pto_ai.build_context(policy, ss.office, ss.pto | ss.sick, today, budget, cap, ss.get("ai_wishes") or "")
+    away = ss.pto | ss.sick | ss.other
+    context = pto_ai.build_context(policy, ss.office, away, today, budget, cap, ss.get("ai_wishes") or "")
     try:
         got = pto_ai.suggest(key, context)
     except pto_ai.PlannerError as e:
@@ -213,24 +230,63 @@ def restore_backup():
     upload = ss.get("backup_file")
     if upload is None:
         return
-    apply_state(*rl.load_state(upload.getvalue().decode("utf-8", "replace"), ss.today))
+    apply_state(rl.load_state(upload.getvalue().decode("utf-8", "replace"), ss.today))
     ss.restored = True
 
 
 def clear_days():
-    ss.office, ss.pto, ss.sick = set(), set(), set()
+    for days in day_sets().values():
+        days.clear()
     ss.confirm_clear = False
+
+
+def own_holidays() -> dict:
+    """The person's own list, started from the built-in one the first time it is edited."""
+    if ss.get("custom_hols") is None:
+        ss.custom_hols = dict(rl.policy_holidays(ss.valid_policy))
+    return ss.custom_hols
+
+
+def remove_holiday(d: date):
+    own_holidays().pop(d, None)
+
+
+def add_holiday():
+    d, name = ss.get("hol_new_date"), (ss.get("hol_new_name") or "").strip()
+    if d:
+        own_holidays()[d] = name[:80] or "Company holiday"
+        ss.hol_new_name = ""
+
+
+def upload_holidays():
+    upload = ss.get("hol_file")
+    if upload is None:
+        return
+    found, bad = rl.parse_holiday_csv(upload.getvalue().decode("utf-8-sig", "replace"))
+    if not found:
+        ss.hol_msg = ("error", "No dates could be read from that file. It needs a date and a name on each row.")
+        return
+    ss.custom_hols = found
+    note = f" {plural(bad, 'row')} could not be read and were left out." if bad else ""
+    ss.hol_msg = ("ok", f"Your list now has {plural(len(found), 'holiday')} from the file.{note}")
+
+
+def reset_holidays():
+    ss.custom_hols = None
+    ss.hol_msg = None
 
 
 # ------------------------------------------------------------------- start
 
-html(f"<style>{load_css()}</style>")
+qp = st.query_params
+theme_now, mode_now = themes.normalise(
+    ss.get("ui_theme") or qp.get("theme"), ss.get("ui_mode") or qp.get("mode")
+)
+html(f"<style>{page_css(theme_now, mode_now)}</style>")
 
 # The saved state round trip. Callbacks have already run, so the session
 # holds the newest state and it can be handed to the browser right here.
-payload = None
-if ss.get("hydrated"):
-    payload = rl.dump_state(current_policy(), ss.office, ss.pto, ss.sick)
+payload = saved_payload() if ss.get("hydrated") else None
 with st.container(key="store"):
     saved = day_store(save=payload, key="day_store", default=None)
 
@@ -246,7 +302,10 @@ if not ss.get("hydrated"):
         ss.today = date.fromisoformat((saved or {}).get("today", ""))
     except ValueError:
         ss.today = date.today()
-    apply_state(*rl.load_state((saved or {}).get("raw"), ss.today))
+    state = rl.load_state((saved or {}).get("raw"), ss.today)
+    # A link can name a look: ?theme=cobalt&mode=dark
+    state["ui"] = {"theme": qp.get("theme") or state["ui"].get("theme"), "mode": qp.get("mode") or state["ui"].get("mode")}
+    apply_state(state)
     ss.first_visit = not (saved or {}).get("raw")
     ss.hydrated = True
     st.rerun()
@@ -271,9 +330,15 @@ with st.sidebar:
         list(MODE_LABELS.values()),
         key="pto_accounting_policy",
         help="Subtracted from workdays: a PTO day shrinks the month before the percentage is applied. "
-        "As a day in office: the month is not changed, and a PTO day counts as a day in.",
+        "As a day in office: the month is not changed, and a PTO day counts as a day in. "
+        "Sick days and other absences are counted the same way.",
     )
-    st.checkbox("Holiday between Christmas and New Year?", key="extended_christmas_break")
+    st.checkbox(
+        "Holiday between Christmas and New Year?", key="extended_christmas_break",
+        disabled=ss.get("custom_hols") is not None,
+        help="Part of the built-in holiday list. Once you edit the list on the Company Holidays tab, "
+        "your own list is used instead.",
+    )
     st.number_input(
         "PTO allowance",
         min_value=0, max_value=60, step=1, key="pto_allowance",
@@ -284,33 +349,40 @@ with st.sidebar:
     if ss.get("policy_error"):
         st.error("The end date is before the start date. Showing the last period that worked.")
 
+    st.header("Appearance")
+    st.selectbox(
+        "Theme", list(themes.THEMES), key="ui_theme",
+        format_func=lambda slug: themes.THEMES[slug]["label"],
+        help="  \n".join(f"{t['label']}: {t['blurb']}." for t in themes.THEMES.values()),
+    )
+    st.radio("Mode", list(themes.MODES), key="ui_mode", horizontal=True, format_func=str.capitalize)
+
     st.header("Your data")
     st.caption(
-        "Your policy and days are saved in this browser only. "
+        "Your policy, days, holidays and theme are saved in this browser only. "
         "Nothing is sent to a server, and another browser or device starts empty."
     )
     st.download_button(
-        "Download a backup",
-        data=rl.dump_state(policy, ss.office, ss.pto, ss.sick),
+        "Download a backup", data=saved_payload(),
         file_name="rto-days.json", mime="application/json", width="stretch",
     )
     st.file_uploader("Restore a backup", type=["json"], key="backup_file", on_change=restore_backup)
+    has_days = any(day_sets().values())
     if ss.get("confirm_clear"):
-        st.warning("This removes every office day, PTO day and sick day you have marked.")
+        st.warning("This removes every day you have marked. Your policy and holidays stay.")
         b1, b2 = st.columns(2)
         b1.button("Yes, clear", on_click=clear_days, width="stretch")
         b2.button("Keep them", on_click=lambda: ss.update(confirm_clear=False), width="stretch")
     else:
         st.button(
             "Clear my days", on_click=lambda: ss.update(confirm_clear=True), width="stretch",
-            disabled=not (ss.office or ss.pto or ss.sick),
+            disabled=not has_days,
         )
 
-summary = rl.summarize(policy, ss.office, ss.pto, today, ss.sick)
-away_days = ss.pto | ss.sick  # the planner treats both as days already taken
-holidays = rl.company_holidays(policy.start, policy.end, policy.christmas_break)
+away_days = ss.pto | ss.sick | ss.other  # the planner treats all three as days already taken
+summary = rl.summarize(policy, ss.office, ss.pto, today, ss.sick, ss.other)
+holidays = rl.policy_holidays(policy)
 workday_set = set(rl.workdays_between(policy.start, policy.end, holidays))
-in_period = policy.start <= today <= policy.end
 
 # ------------------------------------------------------------------ header
 
@@ -320,7 +392,7 @@ if cur is None:
     sub = f"The period runs {fmt_day(policy.start)}, {policy.start.year} to {fmt_day(policy.end)}, {policy.end.year}."
 elif cur.required == 0:
     head = f"No office days needed in {cur.first:%B}"
-    sub = f"{plural(cur.workdays, 'workday')} this month, {cur.pto + cur.sick} of them off."
+    sub = f"{plural(cur.workdays, 'workday')} this month, {cur.pto + cur.sick + cur.other} of them off."
 elif cur.remaining == 0:
     head = f"{cur.first:%B} is covered"
     sub = f"{cur.attended} of {cur.required} office days logged."
@@ -334,33 +406,37 @@ else:
     head = f"{plural(cur.remaining, 'more office day')} in {cur.first:%B}"
     sub = f"{cur.attended} of {cur.required} logged, {plural(cur.left, 'free workday')} left to pick from."
 
-top_l, top_r = st.columns([5, 2], vertical_alignment="bottom")
+paces = []
+if cur is not None:
+    done, base = share_parts(cur.workdays, cur.pto + cur.sick + cur.other, cur.attended, policy.pto_mode)
+    paces.append(pace_meter(f"in {cur.first:%B}", cur.share, done, base, policy.percent))
+done, base = share_parts(
+    summary.workdays, summary.pto + summary.sick + summary.other, summary.attended, policy.pto_mode
+)
+paces.append(pace_meter("this period", summary.share, done, base, policy.percent))
+
+top_l, top_r = st.columns([5, 2], vertical_alignment="center")
 with top_l:
     html(
-        f"<h1>{escape(head)}</h1><p class=\"lead\">{escape(sub)}</p>"
+        f'<div class="band"><h1>{escape(head)}</h1><p class="lead">{escape(sub)}</p>'
+        f'<div class="paces">{"".join(paces)}</div></div>'
     )
 with top_r:
     with st.container(key="today_action"):
         if today in ss.office:
-            st.button("Undo today's log", on_click=undo_today, args=(today,), width="stretch")
+            st.button("Undo today's log", on_click=mark_day, args=(today, "clear"), width="stretch")
         else:
             st.button(
-                "I'm in today", type="primary", on_click=log_today, args=(today,), width="stretch",
+                "I'm in today", type="primary", on_click=mark_day, args=(today, "in"), width="stretch",
                 disabled=today not in workday_set,
                 help=None if today in workday_set else "Today is not a workday in your period.",
             )
 
-paces = []
-if cur is not None:
-    done, base = share_parts(cur.workdays, cur.pto + cur.sick, cur.attended, policy.pto_mode)
-    paces.append(pace_meter(f"in {cur.first:%B}", cur.share, done, base, policy.percent))
-done, base = share_parts(summary.workdays, summary.pto + summary.sick, summary.attended, policy.pto_mode)
-paces.append(pace_meter("this period", summary.share, done, base, policy.percent))
-html(f'<div class="paces">{"".join(paces)}</div>')
-
 pto_note = f"of {policy.pto_allowance} allowed"
-if summary.sick:
-    pto_note += f", plus {plural(summary.sick, 'sick day')}"
+extra = [plural(summary.sick, "sick day")] if summary.sick else []
+extra += [f"{summary.other} other"] if summary.other else []
+if extra:
+    pto_note += ", plus " + " and ".join(extra)
 ahead = [m for m in summary.months if not m.is_past]
 still_note = f"from {ahead[0].first:%B} on" if ahead and ahead[0].first > policy.start else "in this period"
 if not ahead:
@@ -400,95 +476,63 @@ with track_tab:
     vm: date = ss.view_month
     msum = next(m for m in summary.months if m.key == rl.month_key(vm))
 
-    if "mark_mode" not in ss or ss.mark_mode is None:
-        ss.mark_mode = MARK_OFFICE
-    bar_l, bar_r = st.columns([3, 2], vertical_alignment="bottom")
-    with bar_l, st.container(key="monthnav"):
+    with st.container(key="monthnav"):
         n1, n2, n3 = st.columns([1, 5, 1], vertical_alignment="center")
         n1.button(
             "", icon=":material/chevron_left:", key="prev_month", on_click=shift_month, args=(-1,),
             disabled=vm <= first_month, help="Previous month", width="stretch",
         )
         with n2:
+            off = msum.pto + msum.sick + msum.other
             html(
-                f'<h2 class="month">{fmt_month(vm)}</h2>'
-                f'<p class="month-note">{msum.attended} of {msum.required} office days, {msum.pto} PTO'
-                + (f", {msum.sick} sick" if msum.sick else "") + "</p>"
+                f"<h2>{fmt_month(vm)}</h2>"
+                f'<p class="month-note">{msum.attended} of {msum.required} office days, '
+                f"{plural(off, 'day')} off. Point at a day, or tap it, to mark it.</p>"
             )
         n3.button(
             "", icon=":material/chevron_right:", key="next_month", on_click=shift_month, args=(1,),
             disabled=vm >= last_month, help="Next month", width="stretch",
         )
-    with bar_r:
-        st.segmented_control(
-            "Tap a day to mark it as", [MARK_OFFICE, MARK_PTO, MARK_SICK], key="mark_mode", width="stretch",
-        )
 
-    with st.container(key="tray"):
-        html(
-            '<div class="tray-head" aria-hidden="true">'
-            + "".join(f"<span>{d}</span>" for d in ("Mon", "Tue", "Wed", "Thu", "Fri"))
-            + "</div>"
-        )
-        for week in calendar.Calendar(firstweekday=0).monthdatescalendar(vm.year, vm.month):
-            days = [d for d in week[:5]]
-            if not any(d.month == vm.month for d in days):
+    cells = []
+    for week in calendar.Calendar(firstweekday=0).monthdatescalendar(vm.year, vm.month):
+        days = week[:5]
+        if not any(d.month == vm.month for d in days):
+            continue
+        for d in days:
+            if d.month != vm.month or not (policy.start <= d <= policy.end):
+                cells.append(None)
                 continue
-            cols = st.columns(5, gap="small")
-            for col, d in zip(cols, days):
-                with col:
-                    if d.month != vm.month or not (policy.start <= d <= policy.end):
-                        html('<div class="day-gap"></div>')
-                        continue
-                    tag = f"w{d.weekday()}" + ("-now" if d == today else "")
-                    iso = d.isoformat()
-                    if d in holidays:
-                        st.button(
-                            str(d.day), key=f"day-hol-{tag}-{iso}", disabled=True, width="stretch",
-                            icon=":material/celebration:",
-                        )
-                    elif d in ss.sick:
-                        st.button(
-                            str(d.day), key=f"day-sick-{tag}-{iso}", icon=":material/sick:",
-                            on_click=toggle_day, args=(d,), width="stretch",
-                        )
-                    elif d in ss.pto:
-                        st.button(
-                            str(d.day), key=f"day-pto-{tag}-{iso}", icon=":material/beach_access:",
-                            on_click=toggle_day, args=(d,), width="stretch",
-                        )
-                    elif d in ss.office:
-                        st.button(
-                            str(d.day), key=f"day-in-{tag}-{iso}", icon=":material/check:",
-                            on_click=toggle_day, args=(d,), width="stretch",
-                        )
-                    else:
-                        st.button(
-                            str(d.day), key=f"day-free-{tag}-{iso}",
-                            on_click=toggle_day, args=(d,), width="stretch",
-                        )
+            state = next((mark for mark, days_ in day_sets().items() if d in days_), "free")
+            if d in holidays:
+                state = "hol"
+            cells.append({
+                "d": d.isoformat(), "n": d.day, "long": f"{d:%A, %B} {d.day}", "state": state,
+                "hol": holidays.get(d), "today": d == today,
+            })
+    event = month_tray(css=tray_css(ss.ui_theme, ss.ui_mode), cells=cells, key="tray", default=None)
+    if event and event.get("seq") != ss.get("tray_seq"):
+        ss.tray_seq = event.get("seq")
+        try:
+            picked = date.fromisoformat(event.get("d", ""))
+        except ValueError:
+            picked = None
+        if picked in workday_set:
+            mark_day(picked, event.get("mark"))
+            st.rerun()
 
     html(
         '<ul class="legend">'
         '<li><span class="key key-in"></span>In office</li>'
         '<li><span class="key key-pto"></span>PTO</li>'
         '<li><span class="key key-sick"></span>Sick day</li>'
+        '<li><span class="key key-other"></span>Other absence</li>'
         '<li><span class="key key-hol"></span>Company holiday</li>'
         '<li><span class="key key-now"></span>Today</li>'
         "</ul>"
     )
-    month_hols = [(d, name) for d, name in holidays.items() if rl.month_key(d) == msum.key and d.weekday() < 5]
-    if month_hols:
-        html(
-            '<p class="hol-line">Company holidays this month: '
-            + ", ".join(f"{escape(name)} ({d:%a} {d.day})" for d, name in month_hols)
-            + ".</p>"
-        )
-    if ss.get("first_visit") and not (ss.office or ss.pto or ss.sick):
-        st.caption(
-            "Nothing logged yet. Tap the days you were in the office, "
-            "or switch to PTO or Sick day and tap the days you were off."
-        )
+    if ss.get("first_visit") and not has_days:
+        st.caption("Nothing marked yet. Start with the days you were in the office this month.")
 
 # -------------------------------------------------------------------- plan
 
@@ -596,48 +640,89 @@ with month_tab:
         done = min(m.attended, m.required)
         pct = 100 if m.required == 0 else round(100 * done / m.required)
         if m.required == 0:
-            state = "None needed"
+            status = "None needed"
         elif m.remaining == 0:
-            state = "Covered"
+            status = "Covered"
         elif m.is_past:
-            state = f"{m.remaining} not logged"
+            status = f"{m.remaining} not logged"
         elif m.shortfall:
-            state = f"{m.remaining} to go, {m.left} free"
+            status = f"{m.remaining} to go, {m.left} free"
         else:
-            state = f"{m.remaining} to go"
+            status = f"{m.remaining} to go"
         rows.append(
             f'<tr class="{"is-now" if m.is_current else ""}">'
             f"<th scope=\"row\">{m.first:%b %Y}</th>"
-            f'<td class="num">{m.workdays}</td><td class="num">{m.pto}</td><td class="num">{m.sick}</td>'
+            f'<td class="num">{m.workdays}</td><td class="num">{m.pto}</td>'
+            f'<td class="num">{m.sick + m.other}</td>'
             f'<td class="num">{m.required}</td><td class="num">{m.attended}</td>'
             f'<td class="num">{m.share:.0f}%</td>'
             f'<td><span class="meter" role="img" aria-label="{done} of {m.required} office days">'
             f'<span style="inline-size:{pct}%"></span></span></td>'
-            f"<td>{state}</td></tr>"
+            f"<td>{status}</td></tr>"
         )
     html(
         '<table class="sheet sheet-months"><thead><tr><th>Month</th><th class="num">Workdays</th>'
-        '<th class="num">PTO</th><th class="num">Sick</th><th class="num">Required</th><th class="num">Been in</th><th class="num">In office</th>'
+        '<th class="num">PTO</th><th class="num">Sick and other</th>'
+        '<th class="num">Required</th><th class="num">Been in</th><th class="num">In office</th>'
         "<th>Progress</th><th>Status</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody>"
         f'<tfoot><tr><th scope="row">Period</th><td class="num">{summary.workdays}</td>'
-        f'<td class="num">{summary.pto}</td><td class="num">{summary.sick}</td>'
+        f'<td class="num">{summary.pto}</td><td class="num">{summary.sick + summary.other}</td>'
         f'<td class="num">{summary.required}</td>'
-        f'<td class="num">{summary.attended}</td><td class="num">{summary.share:.0f}%</td><td></td><td>{summary.remaining_ahead} to go</td></tr></tfoot>'
+        f'<td class="num">{summary.attended}</td><td class="num">{summary.share:.0f}%</td><td></td>'
+        f"<td>{summary.remaining_ahead} to go</td></tr></tfoot>"
         "</table>"
     )
 
 # ---------------------------------------------------------------- holidays
 
 with holiday_tab:
-    if not holidays:
-        st.info("No company holidays fall inside this period.")
+    own = ss.get("custom_hols") is not None
+    html(
+        "<h2>Company Holidays</h2>"
+        '<p class="lead">These days are not workdays. Change the list to match your company\'s calendar.</p>'
+    )
+    if own:
+        st.caption(f"Using your own list: {plural(len(holidays), 'holiday')} in this period.")
     else:
-        html(
-            '<table class="sheet"><thead><tr><th>Date</th><th>Holiday Name</th></tr></thead><tbody>'
-            + "".join(
-                f"<tr><td>{fmt_day(d)}, {d.year}</td><td>{escape(name)}</td></tr>"
-                for d, name in holidays.items()
-            )
-            + "</tbody></table>"
+        st.caption(
+            "Using the built-in US list: federal holidays, the day after Thanksgiving"
+            + (" and the Christmas break." if policy.christmas_break else ".")
         )
+    msg = ss.pop("hol_msg", None)
+    if msg:
+        (st.success if msg[0] == "ok" else st.error)(msg[1])
+
+    if not holidays:
+        st.info("No holidays in this period. Add one below, or upload a list.")
+    with st.container(key="holrows"):
+        for d, name in holidays.items():
+            c1, c2, c3 = st.columns([3, 6, 2], vertical_alignment="center")
+            c1.html(f'<span class="hol-date">{fmt_day(d)}, {d.year}</span>')
+            c2.html(f"<span>{escape(name)}</span>")
+            c3.button("Remove", key=f"rm-hol-{d.isoformat()}", on_click=remove_holiday, args=(d,), width="stretch")
+
+    html("<h3>Add a holiday</h3>")
+    a1, a2, a3 = st.columns([3, 6, 2], vertical_alignment="bottom")
+    if "hol_new_date" not in ss:
+        ss.hol_new_date = min(max(today, policy.start), policy.end)
+    a1.date_input("Date", key="hol_new_date")
+    a2.text_input("Holiday Name", key="hol_new_name", max_chars=80, placeholder="For example: Company offsite day")
+    a3.button("Add holiday", on_click=add_holiday, width="stretch")
+
+    html("<h3>Upload a list</h3>")
+    st.file_uploader(
+        "A CSV with a date and a name on each row. It replaces the list above.",
+        type=["csv"], key="hol_file", on_change=upload_holidays,
+        help="Dates as 2026-07-03 or 7/3/2026. A header row is fine.",
+    )
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["date", "name"])
+    writer.writerows([d.isoformat(), name] for d, name in holidays.items())
+    d1, d2, _ = st.columns([3, 3, 5])
+    d1.download_button(
+        "Download this list", data=buf.getvalue(), file_name="company-holidays.csv", mime="text/csv",
+        width="stretch",
+    )
+    d2.button("Back to the built-in list", on_click=reset_holidays, disabled=not own, width="stretch")

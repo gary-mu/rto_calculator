@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Month</title>
+<style id="theme"></style>
+</head>
+<body>
+<div class="pane" id="pane">
+  <div class="grid head" aria-hidden="true"><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span></div>
+  <div class="grid" id="days" role="group" aria-label="Workdays this month"></div>
+  <div class="wheel" id="wheel" role="menu" aria-label="Mark this day"></div>
+  <div class="tip" id="tip" role="tooltip"></div>
+</div>
+<script>
+// The month as a pane of workdays. Hover or tap a day and a wheel of marks
+// opens around it; a company holiday shows its name instead.
+(function () {
+  document.documentElement.classList.add("js");
+  var ICON = {
+    in: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+    pto: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/></svg>',
+    sick: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
+    other: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="6" cy="12" r="1.9"/><circle cx="12" cy="12" r="1.9"/><circle cx="18" cy="12" r="1.9"/></svg>',
+    clear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg>',
+    hol: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 21V4M6 5h11l-2.5 4L17 13H6"/></svg>'
+  };
+  var MARKS = [["in", "Office"], ["pto", "PTO"], ["sick", "Sick"], ["other", "Other"]];
+  var LONG = { in: "In office", pto: "PTO", sick: "Sick day", other: "Other absence", free: "Not marked" };
+  var pane = document.getElementById("pane"), days = document.getElementById("days");
+  var wheel = document.getElementById("wheel"), tip = document.getElementById("tip");
+  var openFor = null, closeTimer = null, openTimer = null, lastHeight = 0;
+
+  function send(type, data) {
+    window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data), "*");
+  }
+  function resize() {
+    var h = Math.ceil(pane.getBoundingClientRect().height) + 4;
+    if (h !== lastHeight) { lastHeight = h; send("streamlit:setFrameHeight", { height: h }); }
+  }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); }
+
+  function place(el, cell, w, h, above) {
+    var p = pane.getBoundingClientRect(), c = cell.getBoundingClientRect();
+    var x = c.left - p.left + c.width / 2 - w / 2;
+    var y = above ? c.top - p.top - h - 8 : c.top - p.top + c.height / 2 - h / 2;
+    x = Math.max(4, Math.min(x, p.width - w - 4));
+    if (above && y < 4) y = c.bottom - p.top + 8;
+    y = Math.max(4, Math.min(y, p.height - h - 4));
+    el.style.insetInlineStart = x + "px";
+    el.style.insetBlockStart = y + "px";
+  }
+
+  function closeWheel(refocus) {
+    clearTimeout(openTimer); clearTimeout(closeTimer);
+    if (!openFor) return;
+    var cell = openFor; openFor = null;
+    wheel.classList.remove("is-open");
+    cell.classList.remove("is-open");
+    cell.setAttribute("aria-expanded", "false");
+    wheel.querySelectorAll("button").forEach(function (b) { b.tabIndex = -1; });
+    if (refocus) cell.focus();
+  }
+  function openWheel(cell, focusFirst) {
+    clearTimeout(closeTimer);
+    if (openFor === cell) return;
+    closeWheel(false);
+    openFor = cell;
+    var state = cell.dataset.state;
+    wheel.innerHTML = MARKS.map(function (m) {
+      return '<button type="button" role="menuitemradio" data-mark="' + m[0] + '" aria-checked="' + (state === m[0]) +
+        '" aria-label="' + LONG[m[0]] + '">' + ICON[m[0]] + "<span>" + m[1] + "</span></button>";
+    }).join("") + '<button type="button" role="menuitem" data-mark="clear" aria-label="Clear this day"' +
+      (state === "free" ? ' aria-disabled="true"' : "") + ">" + ICON.clear + "</button>";
+    var size = wheel.offsetWidth || 196;
+    place(wheel, cell, size, size, false);
+    wheel.classList.add("is-open");
+    cell.classList.add("is-open");
+    cell.setAttribute("aria-expanded", "true");
+    if (focusFirst) { var first = wheel.querySelector('[aria-checked="true"]') || wheel.querySelector("button"); first.focus(); }
+  }
+  function later(fn, ms) { clearTimeout(closeTimer); closeTimer = setTimeout(fn, ms); }
+
+  function showTip(cell) {
+    tip.textContent = cell.dataset.hol;
+    tip.classList.add("is-open");
+    place(tip, cell, tip.offsetWidth, tip.offsetHeight, true);
+  }
+  function hideTip() { tip.classList.remove("is-open"); }
+
+  function render(args) {
+    document.getElementById("theme").textContent = args.css || "";
+    closeWheel(false); hideTip();
+    days.innerHTML = (args.cells || []).map(function (c) {
+      if (!c) return '<span class="gap"></span>';
+      var hol = c.state === "hol";
+      var label = c.long + ", " + (hol ? "company holiday, " + c.hol : LONG[c.state]) + (c.today ? ", today" : "");
+      var what = hol ? c.hol : (c.state === "free" ? "" : LONG[c.state]);
+      return '<button type="button" class="day' + (c.today ? " is-today" : "") + '" data-d="' + c.d + '" data-state="' + c.state + '"' +
+        (hol ? ' data-hol="' + esc(c.hol) + '" aria-disabled="true"' : ' aria-haspopup="menu" aria-expanded="false"') +
+        ' aria-label="' + esc(label) + '"><span class="n">' + (ICON[c.state] || "") + c.n + "</span>" +
+        (what ? '<span class="what">' + esc(what) + "</span>" : "") + "</button>";
+    }).join("");
+    requestAnimationFrame(resize);
+  }
+
+  days.addEventListener("pointerover", function (e) {
+    var cell = e.target.closest(".day"); if (!cell || e.pointerType !== "mouse") return;
+    if (cell.dataset.hol) { closeWheel(false); showTip(cell); return; }
+    clearTimeout(openTimer); clearTimeout(closeTimer);
+    openTimer = setTimeout(function () { openWheel(cell, false); }, openFor ? 60 : 140);
+  });
+  days.addEventListener("pointerout", function (e) {
+    var cell = e.target.closest(".day"); if (!cell) return;
+    if (cell.dataset.hol) { hideTip(); return; }
+    clearTimeout(openTimer);
+    if (e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest(".wheel")) return;
+    later(function () { closeWheel(false); }, 260);
+  });
+  wheel.addEventListener("pointerover", function () { clearTimeout(closeTimer); });
+  wheel.addEventListener("pointerout", function (e) {
+    if (e.pointerType !== "mouse") return;
+    var to = e.relatedTarget;
+    if (to && to.closest && (to.closest(".wheel") || to.closest(".day") === openFor)) return;
+    later(function () { closeWheel(false); }, 260);
+  });
+  days.addEventListener("click", function (e) {
+    var cell = e.target.closest(".day"); if (!cell) return;
+    if (cell.dataset.hol) { tip.classList.contains("is-open") ? hideTip() : showTip(cell); return; }
+    if (openFor === cell && e.detail === 0) { closeWheel(true); return; }
+    openWheel(cell, e.detail === 0);
+  });
+  days.addEventListener("focusin", function (e) { var c = e.target.closest(".day"); if (c && c.dataset.hol) showTip(c); });
+  days.addEventListener("focusout", hideTip);
+  wheel.addEventListener("click", function (e) {
+    var b = e.target.closest("button"); if (!b || b.getAttribute("aria-disabled") === "true" || !openFor) return;
+    var d = openFor.dataset.d, mark = b.dataset.mark;
+    if (mark === openFor.dataset.state) mark = "clear";
+    closeWheel(false);
+    send("streamlit:setComponentValue", { value: { d: d, mark: mark, seq: Date.now() }, dataType: "json" });
+  });
+  wheel.addEventListener("keydown", function (e) {
+    var items = Array.prototype.slice.call(wheel.querySelectorAll('button:not([aria-disabled="true"])'));
+    var i = items.indexOf(document.activeElement);
+    if (e.key === "Escape") { e.preventDefault(); closeWheel(true); }
+    else if (e.key === "ArrowRight" || e.key === "ArrowDown") { e.preventDefault(); items[(i + 1) % items.length].focus(); }
+    else if (e.key === "ArrowLeft" || e.key === "ArrowUp") { e.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+    else if (e.key === "Tab") { closeWheel(true); }
+  });
+  document.addEventListener("pointerdown", function (e) {
+    if (openFor && !e.target.closest(".wheel") && !e.target.closest(".day")) closeWheel(false);
+  });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") { closeWheel(true); hideTip(); } });
+  window.addEventListener("resize", function () { closeWheel(false); resize(); });
+  window.addEventListener("message", function (event) {
+    if (event.data && event.data.type === "streamlit:render") render(event.data.args || {});
+  });
+  send("streamlit:componentReady", { apiVersion: 1 });
+})();
+</script>
+</body>
+</html>
