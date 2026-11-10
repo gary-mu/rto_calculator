@@ -463,7 +463,7 @@ if summary.pto > policy.pto_allowance:
 if ss.pop("restored", False):
     st.success("Backup restored.")
 
-track_tab, plan_tab, month_tab, holiday_tab = st.tabs(["Track", "PTO-maxxing", "By month", "Company Holidays"])
+track_tab, plan_tab, month_tab, holiday_tab = st.tabs(["Track", "PTO-maxxing ✨", "By month", "Company Holidays"])
 
 # ------------------------------------------------------------------- track
 
@@ -539,7 +539,7 @@ with track_tab:
 with plan_tab:
     left_pto = max(0, policy.pto_allowance - summary.pto)
     html(
-        "<h2>PTO-maxxing</h2>"
+        "<h2>PTO-maxxing ✨</h2>"
         '<p class="lead">The most time off your PTO can buy, with the policy still met every month.</p>'
     )
     if left_pto == 0:
