@@ -20,6 +20,8 @@
 .lead { color: var(--color-ink-2); margin-block-start: var(--space-xs); }
 .stApp .wordmark { font-family: var(--font-display); font-weight: var(--display-weight); letter-spacing: var(--tracking-display); font-size: var(--text-xl); color: var(--color-ink); }
 .stApp [data-testid="stCaptionContainer"], .stApp [data-testid="stCaptionContainer"] p { opacity: 1; color: var(--color-muted); font-size: var(--text-sm); }
+.stApp .group-label { font-size: var(--text-sm); color: var(--color-ink); }
+.st-key-counts { gap: var(--space-2xs); }
 .st-key-store { position: absolute; width: 1px; height: 1px; overflow: hidden; }
 .loading { padding-block: var(--space-2xl) var(--space-md); }
 .loading p + p { color: var(--color-muted); margin-block-start: var(--space-xs); }

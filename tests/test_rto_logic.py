@@ -364,6 +364,7 @@ def test_state_round_trip():
         start=date(2026, 1, 1), end=date(2026, 6, 30), percent=50.0,
         pto_mode=PTO_AS_OFFICE, christmas_break=False, pto_allowance=15,
         custom_holidays=((date(2026, 3, 17), "Founders Day"),),
+        sick_mode=PTO_SUBTRACT, holiday_mode=PTO_AS_OFFICE,
     )
     raw = rl.dump_state(p, march(2, 3), march(20), march(4), march(5), {"theme": "garden", "mode": "dark"})
     got = rl.load_state(raw, date(2026, 3, 1))
@@ -396,6 +397,98 @@ def test_state_saved_before_holidays_and_other_absence_still_loads():
     raw = '{"v":1,"policy":{"start":"2026-01-01","end":"2026-12-31"},"office":["2026-03-02"],"pto":[]}'
     got = rl.load_state(raw, date(2026, 3, 1))
     assert got["policy"].custom_holidays is None and got["office"] == march(2)
+
+
+# ------------------------------------- three settings for what counts as in
+
+IN, OUT = PTO_AS_OFFICE, PTO_SUBTRACT
+
+
+def policy_with(pto, sick, hol, **kw):
+    return Policy(start=Y2026.start, end=Y2026.end, pto_mode=pto, sick_mode=sick, holiday_mode=hol, **kw)
+
+
+@pytest.mark.parametrize(
+    "pto, sick, hol, expected, base, credit",
+    [
+        # 20 workdays, 2 weekday holidays, 3 PTO, 1 sick or other, 60%
+        (OUT, OUT, OUT, 9, 16, 0),   # floor(16 * 0.6)
+        (IN, IN, IN, 7, 22, 6),      # floor(22 * 0.6) = 13, less 2 + 3 + 1
+        (IN, OUT, OUT, 8, 19, 3),    # floor(19 * 0.6) = 11, less 3
+        (OUT, IN, OUT, 9, 17, 1),    # floor(17 * 0.6) = 10, less 1
+        (OUT, OUT, IN, 8, 18, 2),    # floor(18 * 0.6) = 10, less 2
+    ],
+)
+def test_month_required_for_each_setting(pto, sick, hol, expected, base, credit):
+    need, got_base, got_credit = rl.month_required(policy_with(pto, sick, hol), 20, 2, 3, 1)
+    assert (got_base, got_credit) == (base, credit)
+    assert need == max(0, (got_base * 60) // 100 - got_credit) == expected
+
+
+def test_month_required_matches_the_two_original_rules():
+    for w, p in [(22, 0), (22, 10), (20, 15), (15, 3)]:
+        assert rl.month_required(policy_with(OUT, OUT, OUT), w, 2, p, 0)[0] == rl.required_days(w, p, 60, OUT)
+        assert rl.month_required(policy_with(IN, IN, OUT), w, 2, p, 0)[0] == rl.required_days(w, p, 60, IN)
+
+
+def test_month_required_is_never_negative():
+    assert rl.month_required(policy_with(IN, IN, IN), 5, 10, 5, 5) == (0, 15, 20)
+
+
+def test_a_new_visitor_has_everything_counting_as_a_day_in():
+    p = rl.default_policy(date(2026, 3, 1))
+    assert (p.pto_mode, p.sick_rule, p.holiday_mode) == (IN, IN, IN)
+    s = rl.summarize(p, set(), set(), JAN1)
+    # November 2026: 21 weekdays, 3 of them holidays. floor(21 * 0.6) - 3 = 9.
+    nov = next(m for m in s.months if m.key == "2026-11")
+    assert (nov.workdays, nov.holidays, nov.base, nov.credit, nov.required) == (18, 3, 21, 3, 9)
+    assert nov.share == pytest.approx(100 * 3 / 21)
+
+
+def test_holidays_as_days_in_change_the_year():
+    out = rl.summarize(policy_with(OUT, OUT, OUT), set(), set(), JAN1)
+    held = rl.summarize(policy_with(OUT, OUT, IN), set(), set(), JAN1)
+    assert out.required == 142 and out.workdays == held.workdays == 244
+    assert held.base == 261 and held.credit == 17
+    assert held.required == sum((m.base * 60) // 100 - m.holidays for m in held.months)
+    assert held.required < out.required
+
+
+def test_sick_days_can_be_counted_differently_from_pto():
+    p = policy_with(OUT, IN, OUT)
+    s = rl.summarize(p, set(), march(20), JAN1, march(16), march(17))
+    m = next(x for x in s.months if x.key == "2026-03")
+    # 22 workdays: PTO out leaves 21, floor(12.6) = 12, less 2 sick or other.
+    assert (m.base, m.credit, m.required) == (21, 2, 10)
+
+
+def test_sick_setting_defaults_to_the_pto_setting():
+    assert Policy(start=JAN1, end=date(2026, 2, 1), pto_mode=IN).sick_rule == IN
+    assert Policy(start=JAN1, end=date(2026, 2, 1)).sick_rule == OUT
+
+
+def test_planner_uses_each_setting():
+    today = date(2026, 2, 28)
+    march_only = dict(start=date(2026, 3, 1), end=date(2026, 3, 31))
+    # PTO as a day in: every PTO day saves one office day.
+    p = Policy(pto_mode=IN, sick_mode=OUT, holiday_mode=OUT, **march_only)
+    plan = rl.plan_pto(p, set(), set(), today, 4, sick_days=march(2))
+    assert plan.office_days_saved == 4 and date(2026, 3, 2) not in plan.dates
+    # PTO out of the workdays: 21 left after the sick day, 12 required; 4 PTO leave 17, 10 required.
+    p = Policy(pto_mode=OUT, sick_mode=OUT, holiday_mode=OUT, **march_only)
+    plan = rl.plan_pto(p, set(), set(), today, 4, sick_days=march(2))
+    assert (plan.remaining_before, plan.remaining_after) == (12, 10)
+    checked = rl.check_pto(p, set(), set(), today, [date(2026, 3, 2), date(2026, 3, 6)], 4, sick_days=march(2))
+    assert checked.plan.dates == [date(2026, 3, 6)] and checked.rejected == [date(2026, 3, 2)]
+
+
+def test_state_saved_under_the_old_rules_keeps_them():
+    raw = '{"v":1,"policy":{"start":"2026-01-01","end":"2026-12-31","pto_mode":"office"},"office":[],"pto":[]}'
+    p = rl.load_state(raw, date(2026, 3, 1))["policy"]
+    assert (p.pto_mode, p.sick_rule, p.holiday_mode) == (IN, IN, OUT)
+    raw = '{"v":1,"policy":{"start":"2026-01-01","end":"2026-12-31","pto_mode":"subtract"},"office":[],"pto":[]}'
+    p = rl.load_state(raw, date(2026, 3, 1))["policy"]
+    assert (p.pto_mode, p.sick_rule, p.holiday_mode) == (OUT, OUT, OUT)
 
 
 # -------------------------------------------- other absence, own holidays

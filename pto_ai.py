@@ -61,21 +61,24 @@ class Suggestion:
     breaks_note: str
 
 
+def required_rule(policy: rl.Policy) -> str:
+    """The month's requirement in words, for the model."""
+    def how(mode):
+        return "counts as a day in the office" if mode == rl.PTO_AS_OFFICE else "is taken out of the workdays first"
+    return (
+        f"Per month: required = floor(counted_days * {policy.percent:g} / 100) - credited_days, never below 0. "
+        f"A PTO day {how(policy.pto_mode)}. A sick day or other absence {how(policy.sick_rule)}. "
+        f"A company holiday {how(policy.holiday_mode)}. "
+        "counted_days are the weekdays left after everything taken out; credited_days are the days that count as in the office."
+    )
+
+
 def build_context(policy: rl.Policy, office_days, pto_days, today: date, budget: int,
-                  max_pto_per_break: int, wishes: str) -> dict:
-    summary = rl.summarize(policy, office_days, pto_days, today)
+                  max_pto_per_break: int, wishes: str, sick_days=(), other_days=()) -> dict:
+    summary = rl.summarize(policy, office_days, pto_days, today, sick_days, other_days)
     holidays = rl.policy_holidays(policy)
-    baseline = rl.plan_pto(policy, office_days, pto_days, today, budget, max_pto_per_break)
-    if policy.pto_mode == rl.PTO_SUBTRACT:
-        rule = (
-            f"required = floor((workdays - pto) * {policy.percent:g} / 100), per month. "
-            "A PTO day shrinks the month before the percentage is applied."
-        )
-    else:
-        rule = (
-            f"required = floor(workdays * {policy.percent:g} / 100) - pto, per month, never below 0. "
-            "A PTO day counts as a day in the office."
-        )
+    baseline = rl.plan_pto(policy, office_days, pto_days, today, budget, max_pto_per_break, sick_days, other_days)
+    rule = required_rule(policy)
     return {
         "today": today.isoformat(),
         "period": [policy.start.isoformat(), policy.end.isoformat()],
@@ -87,6 +90,8 @@ def build_context(policy: rl.Policy, office_days, pto_days, today: date, budget:
                 "month": m.key,
                 "workdays": m.workdays,
                 "pto_already_booked": m.pto,
+                "sick_or_other_absence": m.sick + m.other,
+                "company_holidays": m.holidays,
                 "office_days_required": m.required,
                 "office_days_logged": m.attended,
                 "office_days_still_required": m.remaining,
@@ -97,7 +102,7 @@ def build_context(policy: rl.Policy, office_days, pto_days, today: date, budget:
         ],
         "company_holidays": {d.isoformat(): name for d, name in holidays.items() if d >= today},
         "pto_already_booked": sorted(d.isoformat() for d in pto_days if d >= today),
-        "free_days": [f"{d.isoformat()} {d:%a}" for d in rl.free_days(policy, office_days, pto_days, today)],
+        "free_days": [f"{d.isoformat()} {d:%a}" for d in rl.free_days(policy, office_days, pto_days, today, sick_days, other_days)],
         "computed_plan": [d.isoformat() for d in baseline.dates],
         "what_the_person_wants": wishes.strip()[:MAX_WISH_CHARS] or "Nothing specific. Get me the most time off.",
     }

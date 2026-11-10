@@ -20,10 +20,6 @@ import rto_logic as rl
 import themes
 
 ROOT = Path(__file__).parent
-MODE_LABELS = {
-    rl.PTO_SUBTRACT: "PTO subtracted from workdays",
-    rl.PTO_AS_OFFICE: "PTO as a day in office",
-}
 MARKS = ("in", "pto", "sick", "other")  # what the calendar's wheel can set
 AI_CALLS_PER_VISIT = 5
 
@@ -96,16 +92,9 @@ def pace_meter(label: str, share: float, done: int, base: int, target: float) ->
         f'the policy asks for {target:g} percent">'
         f'<span style="inline-size:{min(share, 100):.1f}%"></span>'
         f'<i style="inset-inline-start:{min(target, 100):.1f}%"></i></span>'
-        f'<p class="pace-note">{done} of {plural(base, "workday")}, the policy asks for {target:g}%</p>'
+        f'<p class="pace-note">{done} of {plural(base, "day")} count as in, the policy asks for {target:g}%</p>'
         "</div>"
     )
-
-
-def share_parts(workdays: int, pto: int, attended: int, mode: str):
-    """(days that count as in office, the workdays they are measured against)."""
-    if mode == rl.PTO_SUBTRACT:
-        return attended, max(0, workdays - pto)
-    return attended + pto, workdays
 
 
 def plan_table(plan: rl.PtoPlan) -> str:
@@ -145,7 +134,9 @@ def apply_state(state: dict):
     ss.custom_hols = None if policy.custom_holidays is None else dict(policy.custom_holidays)
     ss.p_start, ss.p_end = policy.start, policy.end
     ss.workdays_percentage = float(policy.percent)
-    ss.pto_accounting_policy = MODE_LABELS[policy.pto_mode]
+    ss.acc_pto = policy.pto_mode == rl.PTO_AS_OFFICE
+    ss.acc_sick = policy.sick_rule == rl.PTO_AS_OFFICE
+    ss.acc_hol = policy.holiday_mode == rl.PTO_AS_OFFICE
     ss.extended_christmas_break = policy.christmas_break
     ss.pto_allowance = int(policy.pto_allowance)
     ss.valid_policy = policy
@@ -161,12 +152,14 @@ def current_policy() -> rl.Policy:
             start=ss.p_start,
             end=ss.p_end,
             percent=float(ss.workdays_percentage),
-            pto_mode=next(k for k, v in MODE_LABELS.items() if v == ss.pto_accounting_policy),
+            pto_mode=rl.PTO_AS_OFFICE if ss.acc_pto else rl.PTO_SUBTRACT,
+            sick_mode=rl.PTO_AS_OFFICE if ss.acc_sick else rl.PTO_SUBTRACT,
+            holiday_mode=rl.PTO_AS_OFFICE if ss.acc_hol else rl.PTO_SUBTRACT,
             christmas_break=bool(ss.extended_christmas_break),
             pto_allowance=int(ss.pto_allowance),
             custom_holidays=None if custom is None else tuple(sorted(custom.items())),
         )
-    except (ValueError, TypeError, StopIteration):
+    except (ValueError, TypeError):
         ss.policy_error = True
         return ss.valid_policy
     ss.policy_error = False
@@ -211,8 +204,9 @@ def ask_ai(policy, today, budget, cap):
         ss.ai_error = f"That is {AI_CALLS_PER_VISIT} AI plans this visit, which is the limit. The quick plan still works."
         return
     ss.ai_calls = ss.get("ai_calls", 0) + 1
-    away = ss.pto | ss.sick | ss.other
-    context = pto_ai.build_context(policy, ss.office, away, today, budget, cap, ss.get("ai_wishes") or "")
+    context = pto_ai.build_context(
+        policy, ss.office, ss.pto, today, budget, cap, ss.get("ai_wishes") or "", ss.sick, ss.other
+    )
     try:
         got = pto_ai.suggest(key, context)
     except pto_ai.PlannerError as e:
@@ -325,14 +319,12 @@ with st.sidebar:
         help="The share of each month's workdays you are required to be in the office. "
         "The result is rounded down, month by month.",
     )
-    st.radio(
-        "Choose how PTO is accounted for",
-        list(MODE_LABELS.values()),
-        key="pto_accounting_policy",
-        help="Subtracted from workdays: a PTO day shrinks the month before the percentage is applied. "
-        "As a day in office: the month is not changed, and a PTO day counts as a day in. "
-        "Sick days and other absences are counted the same way.",
-    )
+    with st.container(key="counts"):
+        html('<p class="group-label">Counts as a day in office</p>')
+        st.checkbox("PTO", key="acc_pto")
+        st.checkbox("Sick days", key="acc_sick", help="Other absences are counted the same way as sick days.")
+        st.checkbox("Company holidays", key="acc_hol")
+        st.caption("Anything left unticked is taken out of the workdays before the percentage is applied.")
     st.checkbox(
         "Holiday between Christmas and New Year?", key="extended_christmas_break",
         disabled=ss.get("custom_hols") is not None,
@@ -379,7 +371,7 @@ with st.sidebar:
             disabled=not has_days,
         )
 
-away_days = ss.pto | ss.sick | ss.other  # the planner treats all three as days already taken
+away_days = ss.pto | ss.sick | ss.other
 summary = rl.summarize(policy, ss.office, ss.pto, today, ss.sick, ss.other)
 holidays = rl.policy_holidays(policy)
 workday_set = set(rl.workdays_between(policy.start, policy.end, holidays))
@@ -408,12 +400,10 @@ else:
 
 paces = []
 if cur is not None:
-    done, base = share_parts(cur.workdays, cur.pto + cur.sick + cur.other, cur.attended, policy.pto_mode)
-    paces.append(pace_meter(f"in {cur.first:%B}", cur.share, done, base, policy.percent))
-done, base = share_parts(
-    summary.workdays, summary.pto + summary.sick + summary.other, summary.attended, policy.pto_mode
+    paces.append(pace_meter(f"in {cur.first:%B}", cur.share, cur.attended + cur.credit, cur.base, policy.percent))
+paces.append(
+    pace_meter("this period", summary.share, summary.attended + summary.credit, summary.base, policy.percent)
 )
-paces.append(pace_meter("this period", summary.share, done, base, policy.percent))
 
 top_l, top_r = st.columns([5, 2], vertical_alignment="center")
 with top_l:
@@ -443,10 +433,9 @@ logged = [d for d in month_days if d in ss.office and d not in away_days]
 been = sum(1 for d in logged if d <= today)
 planned = len(logged) - been
 leave = sm.pto + sm.sick + sm.other
-if policy.pto_mode == rl.PTO_SUBTRACT:
-    basis = f"{policy.percent:g}% of {sm.workdays - leave} workdays" + (" after leave" if leave else "")
-else:
-    basis = f"{policy.percent:g}% of {sm.workdays} workdays" + (", less leave" if leave else "")
+basis = f"{policy.percent:g}% of {plural(sm.base, 'day')}"
+if sm.credit:
+    basis += f", less {sm.credit} that count as in"
 if sm.required == 0:
     go_note = "nothing needed this month"
 elif sm.remaining == 0:
@@ -596,7 +585,9 @@ with plan_tab:
 
         ai = ss.get("ai_plan")
         if ai:
-            checked = rl.check_pto(policy, ss.office, away_days, today, ai["dates"], min(ai["budget"], left_pto))
+            checked = rl.check_pto(
+                policy, ss.office, ss.pto, today, ai["dates"], min(ai["budget"], left_pto), ss.sick, ss.other
+            )
             plan = checked.plan
             html(
                 "<h3>The AI's plan</h3>"
@@ -625,7 +616,7 @@ with plan_tab:
                 )
             a2.button("Back to the quick plan", on_click=drop_ai_plan, key="drop_ai_plan", width="stretch")
         else:
-            plan = rl.plan_pto(policy, ss.office, away_days, today, budget, cap)
+            plan = rl.plan_pto(policy, ss.office, ss.pto, today, budget, cap, ss.sick, ss.other)
             html(
                 "<h3>Quick plan, no AI</h3>"
                 '<p class="ai-note">Each day goes where it cuts the most office days, '

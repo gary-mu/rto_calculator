@@ -27,11 +27,24 @@ def test_context_lists_only_free_future_days():
     assert set(ctx["computed_plan"]) <= set(days)
 
 
-def test_context_states_the_rule_for_each_pto_accounting():
-    assert "workdays - pto" in context()["required_rule"]
-    p = rl.Policy(start=POLICY.start, end=POLICY.end, pto_mode=rl.PTO_AS_OFFICE)
-    ctx = pto_ai.build_context(p, set(), set(), TODAY, 6, 4, "")
-    assert "counts as a day in the office" in ctx["required_rule"]
+def test_context_states_the_rule_for_each_accounting():
+    rule = context()["required_rule"]  # a new visitor: everything counts as a day in
+    assert rule.count("counts as a day in the office") == 3
+    p = rl.Policy(start=POLICY.start, end=POLICY.end, pto_mode=rl.PTO_SUBTRACT,
+                  sick_mode=rl.PTO_AS_OFFICE, holiday_mode=rl.PTO_SUBTRACT)
+    rule = pto_ai.build_context(p, set(), set(), TODAY, 6, 4, "")["required_rule"]
+    assert "A PTO day is taken out of the workdays first" in rule
+    assert "A sick day or other absence counts as a day in the office" in rule
+    assert "A company holiday is taken out of the workdays first" in rule
+
+
+def test_context_keeps_sick_and_other_days_out_of_the_free_days():
+    ctx = pto_ai.build_context(POLICY, set(), set(), TODAY, 6, 4, "",
+                               sick_days={date(2026, 11, 16)}, other_days={date(2026, 11, 17)})
+    days = [d[:10] for d in ctx["free_days"]]
+    assert "2026-11-16" not in days and "2026-11-17" not in days
+    assert ctx["months"][0]["sick_or_other_absence"] == 2
+    assert ctx["months"][0]["company_holidays"] == 3
 
 
 def test_wishes_are_trimmed_and_capped():

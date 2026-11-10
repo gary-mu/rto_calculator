@@ -24,10 +24,11 @@ deciding where to put PTO. Live at https://rto-calculate.streamlit.app/.
   model only proposes dates: the app keeps the ones that are free workdays,
   does all the counting itself, and warns if a month would fall short.
 
-PTO is accounted for in one of two ways, chosen in the sidebar: taken out of
-the workdays before the percentage is applied, or counted as a day in office.
-A sick day or other absence is accounted for the same way, without using the
-PTO allowance.
+Three things can each either count as a day in the office or be taken out of
+the workdays before the percentage is applied, chosen in the sidebar: PTO,
+sick days (other absences follow sick days) and company holidays. A new
+visitor starts with all three counting as a day in. Sick days and other
+absences never use the PTO allowance.
 
 ## The AI planner's key
 
