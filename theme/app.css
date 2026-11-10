@@ -1,0 +1,165 @@
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: Dose (deal 3/3, seed rto-calculator-app-screen-f63a·f86f14fc·2026-11-10·r0) · redesign: full
+ * nav: kept, Streamlit's sidebar for the policy and tabs for the four views · signature: the month as a pill-organiser tray, one moulded key per workday · states: loading, empty, error, full · dose: white
+ * axes: light/grotesk-sans/chromatic-green · posture: committed · contrast: pass · v2.0.0 */
+/* Hallmark · pre-emit critique: P4 H4 E4 S5 R4 V4 · weakest: E, Streamlit owns the widget markup; styled its controls by test id and checked each state in the render */
+/* Hallmark · dropped the average-PTO slider, the per-month PTO fields, the option radio, the monthly bar chart and the AI planner's fields and button · PTO is now marked on dated days and the planner is computed, so those inputs have nothing left to feed */
+@import url("https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@700&family=Instrument+Sans:wght@400;500&family=DM+Mono:wght@400;500&display=swap");
+/* --- app --- */
+
+:root {
+  --tray-key: 52px;
+  --control: 40px;
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .2 0 0 0 0 .3 0 0 0 0 .25 0 0 0 .05 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ---- the shell ---- */
+.stApp { background-color: var(--color-paper); background-image: var(--grain); color: var(--color-ink); font-family: var(--font-body); }
+[data-testid="stHeader"] { background: transparent; }
+[data-testid="stMainBlockContainer"] { max-width: 1120px; padding: var(--space-xl) var(--space-lg) var(--space-3xl); }
+[data-testid="stSidebar"] { background-color: var(--color-paper-2); border-inline-end: var(--rule-hair) solid var(--color-rule); }
+[data-testid="stSidebar"] h2 { font-size: var(--text-section); padding-block: var(--space-md) var(--space-2xs); }
+.stApp h1, .stApp h2, .stApp h3 { font-family: var(--font-display); font-weight: var(--display-weight); letter-spacing: var(--tracking-display); color: var(--color-ink); }
+.stApp h1 { font-size: var(--text-3xl); line-height: 1.05; max-width: 24ch; padding: 0; }
+.stApp h1, .stApp h2 { text-wrap: balance; }
+.stApp h2 { line-height: 1.1; }
+.stApp p, .stApp label, .stApp li { font-family: var(--font-body); }
+.lead { color: var(--color-ink-2); margin-block-start: var(--space-xs); }
+.wordmark { font-family: var(--font-display); font-weight: 700; letter-spacing: var(--tracking-display); font-size: var(--text-lg); color: var(--color-accent-deep); }
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { opacity: 1; color: var(--color-muted); font-size: var(--text-sm); }
+.st-key-store { position: absolute; width: 1px; height: 1px; overflow: hidden; }
+.loading { padding-block: var(--space-2xl) var(--space-md); }
+.loading p + p { color: var(--color-muted); margin-block-start: var(--space-xs); }
+
+/* ---- controls: moulded plastic ---- */
+.stApp button[data-testid^="stBaseButton"] {
+  min-height: var(--control); border: 0; border-radius: var(--radius-input);
+  background: var(--light); color: var(--color-ink);
+  font: 500 var(--text-md) var(--font-body); white-space: nowrap;
+  box-shadow: inset 0 1px 0 var(--glint), 0 0 0 1px var(--color-muted), 0 3px 0 var(--color-rule);
+  transition: transform var(--dur-micro) var(--ease-out), background-color var(--dur-micro) var(--ease-out);
+}
+.stApp button[data-testid^="stBaseButton"] p { font: inherit; color: inherit; }
+.stApp button[data-testid^="stBaseButton"]:hover { background: var(--color-paper-2); color: var(--color-ink); }
+.stApp button[data-testid^="stBaseButton"]:active { transform: translateY(3px); box-shadow: inset 0 1px 0 var(--glint), 0 0 0 1px var(--color-muted); }
+.stApp button[data-testid^="stBaseButton"]:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+.stApp button[data-testid="stBaseButton-primary"] {
+  background: linear-gradient(var(--color-accent), var(--color-accent-deep)); color: var(--color-accent-ink);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--glint) 30%, transparent), 0 0 0 1px var(--color-accent-deep), 0 3px 0 var(--color-accent-deep);
+}
+.stApp button[data-testid="stBaseButton-primary"]:hover { background: var(--color-accent-deep); color: var(--color-accent-ink); }
+.stApp button[data-testid="stBaseButton-primary"]:active { box-shadow: 0 0 0 1px var(--color-accent-deep); }
+.st-key-today_action button { min-height: 52px; }
+
+.stApp button:focus-visible, .stApp [role="tab"]:focus-visible, .stApp [role="radio"]:focus-visible,
+.stApp a:focus-visible, .stApp summary:focus-visible, .stApp label:has(input:focus-visible) {
+  outline: 2px solid var(--color-focus); outline-offset: 2px;
+}
+.stApp [data-baseweb="input"]:focus-within, .stApp [data-baseweb="base-input"]:focus-within,
+.stApp [data-testid="stNumberInputContainer"]:focus-within, .stApp [data-testid="stDateInput"] [data-baseweb="input"]:focus-within {
+  outline: 2px solid var(--color-focus); outline-offset: 1px;
+}
+.stApp input { font-family: var(--font-body); color: var(--color-ink); caret-color: var(--color-accent); }
+.stApp [data-testid="stNumberInputContainer"], .stApp [data-testid="stDateInput"] [data-baseweb="input"] { background: var(--light); }
+
+/* ---- the top: status, action, figures ---- */
+.stApp dl.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-lg); margin: var(--space-lg) 0 var(--space-xs); padding: var(--space-md) 0 0; border-block-start: var(--rule-hair) solid var(--color-rule); }
+.stats div { display: flex; flex-direction: column; min-width: 0; }
+.stats dt { font-size: var(--text-sm); font-weight: 500; color: var(--color-ink-2); white-space: nowrap; }
+.stats dd { margin: 0; }
+.stats .num { font-family: var(--font-display); font-weight: 700; font-size: var(--text-3xl); letter-spacing: var(--tracking-display); line-height: 1.1; font-variant-numeric: tabular-nums lining-nums; }
+.stats .note { font-size: var(--text-sm); color: var(--color-muted); }
+
+/* ---- tabs ---- */
+.stApp [data-baseweb="tab-list"] { gap: var(--space-lg); overflow-x: auto; }
+.stApp [data-baseweb="tab"] { min-height: 44px; }
+.stApp [data-baseweb="tab"] p { font: 500 var(--text-md) var(--font-body); white-space: nowrap; }
+.stApp [data-baseweb="tab-panel"] { padding-block-start: var(--space-lg); }
+
+/* ---- the signature: the month as a pill organiser ---- */
+.st-key-monthnav [data-testid="stHorizontalBlock"] { flex-wrap: nowrap; gap: var(--space-sm); }
+.st-key-monthnav [data-testid="stColumn"] { min-width: 0; width: auto; }
+.st-key-monthnav [data-testid="stColumn"]:nth-child(odd) { flex: 0 0 56px; }
+.st-key-monthnav [data-testid="stColumn"]:nth-child(2) { flex: 1 1 0; text-align: center; }
+.month { font-size: var(--text-xl); }
+.month-note { font-size: var(--text-sm); color: var(--color-muted); margin-block-start: var(--space-2xs); }
+.st-key-tray {
+  padding: var(--space-md); border-radius: var(--radius-card);
+  background: color-mix(in oklab, var(--color-paper-3) 55%, var(--color-paper));
+  box-shadow: inset 0 2px 5px color-mix(in oklab, var(--color-ink) 14%, transparent), inset 0 0 0 1px var(--color-rule), 0 1px 0 var(--glint);
+  gap: var(--space-sm);
+}
+.st-key-tray [data-testid="stHorizontalBlock"] { flex-wrap: nowrap; gap: var(--space-sm); }
+.st-key-tray [data-testid="stColumn"] { min-width: 0; flex: 1 1 0; width: auto; }
+.tray-head { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--space-sm); }
+.tray-head span { font-size: var(--text-sm); font-weight: 500; color: var(--color-ink-2); text-align: center; }
+.day-gap { min-height: var(--tray-key); }
+
+.stApp [class*="st-key-day-"] button {
+  --t: var(--p-thu);
+  min-height: var(--tray-key); border-radius: var(--radius-card);
+  font: 500 var(--text-lg) var(--font-outlier); font-variant-numeric: tabular-nums;
+  background: linear-gradient(color-mix(in oklab, var(--glint) 45%, transparent), transparent 22%), color-mix(in oklab, var(--t) 72%, var(--light));
+  box-shadow: inset 0 1.5px 0 var(--glint), inset 0 -14px 18px -14px color-mix(in oklab, var(--t) 55%, var(--color-ink)), 0 0 0 1px color-mix(in oklab, var(--t) 55%, var(--color-muted)), 0 3px 0 color-mix(in oklab, var(--t) 60%, var(--color-muted));
+}
+.stApp [class*="st-key-day-"] button:hover { background: linear-gradient(color-mix(in oklab, var(--glint) 60%, transparent), transparent 30%), color-mix(in oklab, var(--t) 55%, var(--light)); }
+.stApp [class*="st-key-day-"] button:active { transform: translateY(3px); box-shadow: inset 0 1.5px 0 var(--glint), 0 0 0 1px color-mix(in oklab, var(--t) 55%, var(--color-muted)); }
+.stApp [class*="st-key-day-"][class*="-w0-"] button { --t: var(--p-mon); }
+.stApp [class*="st-key-day-"][class*="-w1-"] button { --t: var(--p-tue); }
+.stApp [class*="st-key-day-"][class*="-w2-"] button { --t: var(--p-wed); }
+.stApp [class*="st-key-day-"][class*="-w3-"] button { --t: var(--p-thu); }
+.stApp [class*="st-key-day-"][class*="-w4-"] button { --t: var(--p-fri); }
+
+/* in the office: the green does the signal */
+.stApp [class*="st-key-day-in-"] button, .stApp [class*="st-key-day-in-"] button:hover {
+  background: linear-gradient(var(--color-accent), var(--color-accent-deep)); color: var(--color-accent-ink);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, var(--glint) 30%, transparent), 0 0 0 1px var(--color-accent-deep), 0 3px 0 var(--color-accent-deep);
+}
+/* PTO: a paper label on the tray */
+.stApp [class*="st-key-day-pto-"] button, .stApp [class*="st-key-day-pto-"] button:hover {
+  background: var(--color-ink); color: var(--color-paper);
+  box-shadow: 0 0 0 1px var(--color-ink), 0 3px 0 var(--color-ink-2);
+}
+/* a company holiday: an empty compartment */
+.stApp [class*="st-key-day-hol-"] button, .stApp [class*="st-key-day-hol-"] button:disabled {
+  background: transparent; color: var(--color-ink-2); opacity: 1; cursor: not-allowed;
+  box-shadow: inset 0 0 0 1px var(--color-muted);
+  border-radius: var(--radius-card);
+}
+.stApp [class*="st-key-day-"][class*="-now-"] button { outline: 2px solid var(--color-ink); outline-offset: 2px; }
+.stApp [class*="st-key-day-"][class*="-now-"] button:focus-visible { outline-color: var(--color-focus); }
+
+.stApp ul.legend { display: flex; flex-wrap: wrap; gap: var(--space-xs) var(--space-lg); list-style: none; margin: var(--space-sm) 0 0; padding: 0; }
+.stApp ul.legend li { display: flex; align-items: center; gap: var(--space-xs); font-size: var(--text-sm); color: var(--color-ink-2); margin: 0; }
+.key { inline-size: 16px; block-size: 16px; border-radius: 5px; flex: none; }
+.key-in { background: var(--color-accent); }
+.key-pto { background: var(--color-ink); }
+.key-hol { box-shadow: inset 0 0 0 1px var(--color-muted); }
+.key-now { box-shadow: 0 0 0 2px var(--color-paper), 0 0 0 4px var(--color-ink); inline-size: 12px; block-size: 12px; margin-inline: var(--space-3xs); background: var(--p-tue); }
+
+/* ---- tables ---- */
+.sheet { width: 100%; border-collapse: collapse; font-size: var(--text-md); margin-block-start: var(--space-md); }
+.sheet th, .sheet td { padding: var(--space-sm) var(--space-md) var(--space-sm) 0; text-align: start; border: 0; border-block-end: var(--rule-hair) solid var(--color-rule); }
+.sheet thead th { font-size: var(--text-sm); font-weight: 500; color: var(--color-ink-2); white-space: nowrap; border-block-end-color: var(--color-muted); }
+.sheet tbody th { font-weight: 500; white-space: nowrap; }
+.sheet .num { text-align: end; font-variant-numeric: tabular-nums; }
+.sheet td.num { font-family: var(--font-outlier); }
+.sheet tfoot th, .sheet tfoot td { font-weight: 500; border-block-end: 0; border-block-start: var(--rule-hair) solid var(--color-muted); }
+.sheet tr.is-now th, .sheet tr.is-now td { background: var(--color-paper-2); }
+.sheet tr.is-now th { box-shadow: inset 3px 0 0 var(--color-accent); padding-inline-start: var(--space-sm); }
+.meter { display: block; inline-size: 120px; block-size: 8px; border-radius: var(--radius-pill); background: var(--color-paper-3); box-shadow: inset 0 0 0 1px var(--color-rule); overflow: hidden; }
+.meter span { display: block; block-size: 100%; background: var(--color-accent); border-radius: var(--radius-pill); }
+.plan-line { font-size: var(--text-lg); font-weight: 500; margin-block-start: var(--space-md); max-width: 60ch; }
+
+@media (max-width: 40rem) {
+  :root { --tray-key: 48px; }
+  [data-testid="stMainBlockContainer"] { padding-inline: var(--space-md); }
+  .stApp dl.stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .st-key-tray { padding: var(--space-xs); }
+  .st-key-tray [data-testid="stHorizontalBlock"], .tray-head { gap: var(--space-2xs); }
+  .sheet th:nth-child(2), .sheet td:nth-child(2), .sheet th:nth-child(6), .sheet td:nth-child(6) { display: none; }
+  .sheet th, .sheet td { padding-inline-end: var(--space-xs); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stApp button[data-testid^="stBaseButton"] { transition: none; }
+  .stApp button[data-testid^="stBaseButton"]:active { transform: none; }
+}

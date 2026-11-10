@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Saved days</title></head>
+<body>
+<script>
+// Keeps the person's policy and days in this browser's localStorage.
+// Python sends the current state as `save`; this page reports what was stored
+// when it first loads, with the browser's local date.
+(function () {
+  var KEY = "rto-calculator:v1";
+  var reported = false, lastSaved = null;
+  function send(type, data) {
+    window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type: type }, data), "*");
+  }
+  function read() { try { return window.localStorage.getItem(KEY); } catch (e) { return null; } }
+  function write(v) { try { window.localStorage.setItem(KEY, v); return true; } catch (e) { return false; } }
+  function clear() { try { window.localStorage.removeItem(KEY); } catch (e) {} }
+  function today() {
+    var d = new Date(), p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+  }
+  window.addEventListener("message", function (event) {
+    if (!event.data || event.data.type !== "streamlit:render") return;
+    var args = event.data.args || {};
+    if (typeof args.save === "string" && args.save !== lastSaved) {
+      if (args.save === "") clear(); else write(args.save);
+      lastSaved = args.save;
+    }
+    if (!reported) {
+      reported = true;
+      send("streamlit:setComponentValue", { value: { raw: read(), today: today() }, dataType: "json" });
+    }
+    send("streamlit:setFrameHeight", { height: 0 });
+  });
+  send("streamlit:componentReady", { apiVersion: 1 });
+})();
+</script>
+</body>
+</html>

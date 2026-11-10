@@ -1,451 +1,487 @@
-import asyncio
+"""RTO calculator: how many days you need in the office, how many you have
+done, and where to put PTO. The sums live in rto_logic.py."""
+
+from __future__ import annotations
+
+import calendar
+from datetime import date
+from html import escape
+from pathlib import Path
+
 import streamlit as st
-import holidays as hd
-import math
-import pandas as pd
-import numpy as np
-from datetime import datetime, timedelta
-import plotly.express as px
-from pandas.tseries.holiday import USFederalHolidayCalendar
-import os
-from math_tool import calculator_tool
+import streamlit.components.v1 as components
 
-databricks_key = st.secrets['general']["DATABRICKS_API_KEY"]
+import rto_logic as rl
 
-def get_custom_holidays(start_date, end_date, extended_christmas_break):
-    start = pd.to_datetime(start_date)
-    end = pd.to_datetime(end_date)
+ROOT = Path(__file__).parent
+MODE_LABELS = {
+    rl.PTO_SUBTRACT: "PTO subtracted from workdays",
+    rl.PTO_AS_OFFICE: "PTO as a day in office",
+}
+MARK_OFFICE, MARK_PTO = "In office", "PTO"
 
-    # Initialize US holidays
-    us_holidays = hd.US(years=range(start_date.year, end_date.year + 1))
+st.set_page_config(page_title="RTO calculator", page_icon=":material/calendar_month:", layout="wide")
 
-    # Get federal holidays from the `holidays` module
-    federal_holidays = {date: name for date, name in us_holidays.items() if start <= pd.to_datetime(date) <= end}
-
-    # Compute additional holidays
-    additional_holidays = {}
-
-    year = start_date.year
-    thanksgiving = pd.to_datetime(pd.date_range(start=f"{year}-11-01", end=f"{year}-11-30", freq="W-THU")[3])
-   
-    if start <= thanksgiving <= end:
-        day_after_thanksgiving = thanksgiving + timedelta(days=1)
-        additional_holidays[day_after_thanksgiving] = "Day After Thanksgiving"
-
-    # Add Christmas Break (Dec 24–Dec 31, skipping weekends)
-    if extended_christmas_break:
-        christmas_break = pd.date_range(start=f"{year}-12-24", end=f"{year}-12-31")
-        christmas_break = christmas_break[~christmas_break.weekday.isin([5, 6])]
-        #exclude Christmas day from the extended break to avoid duplicate
-        christmas = pd.to_datetime(f'{year}-12-25')
-        christmas_break = christmas_break[~christmas_break.isin([christmas])]
-
-        for date in christmas_break:
-            if start <= date <= end:
-                additional_holidays[date] = "Christmas Break"
-
-    # Merge all holidays
-    all_holidays = {**federal_holidays, **additional_holidays}
-
-    # Convert to DataFrame
-    holiday_df = pd.DataFrame(list(all_holidays.items()), columns=["Date", "Holiday Name"])
-    holiday_df["Date"] = pd.to_datetime(holiday_df["Date"])
-
-    holiday_df_sorted = holiday_df.sort_values("Date").reset_index(drop=True)
-
-    holiday_result_dict = {
-        'holiday_df': holiday_df_sorted,
-        'holiday_dates': holiday_df_sorted["Date"]
-    }
-    return holiday_result_dict
-
-def calculate_workdays(start_date, end_date):
-    """Calculate number of workdays between two dates, excluding US federal holidays."""
-    holidays = get_custom_holidays(start_date, end_date, extended_christmas_break)['holiday_dates']
-    
-    # Create date range and convert to dataframe
-    date_range = pd.date_range(start=start_date, end=end_date)
-    df = pd.DataFrame(index=date_range)
-    
-    # Filter out weekends and holidays
-    workdays = df[~df.index.isin(holidays) & 
-                 ~df.index.weekday.isin([5, 6])].shape[0]
-    
-    return workdays
-
-def calculate_monthly_workdays(start_date, end_date):
-    """Calculate workdays for each month in the date range."""
-    months = pd.date_range(start=start_date, end=end_date, freq='ME')
-    monthly_workdays = {}
-    
-    for month in months:
-        month_start = month.replace(day=1)
-        month_end = month
-        workdays = calculate_workdays(month_start, month_end)
-        monthly_workdays[month.strftime('%Y-%m')] = workdays
-    
-    return monthly_workdays
-
-def display_metrics_and_charts(monthly_data, monthly_workdays, holidays):
-    """Display metrics and charts based on the calculated data."""
-    # Display summary metrics
-    st.subheader("Summary")
-    
-    total_holidays = len(holidays)
-    total_ptos = st.session_state.total_pto
-    total_workdays = sum(monthly_workdays.values()) - total_pto
-    total_office_days = sum(row['Office Days Required'] for row in monthly_data)
-    avg_monthly_office_days = round(total_office_days / len(monthly_workdays), 1)
-
-    row1_col1, row1_col2, row1_col3 = st.columns(3)
-    row1_col1.metric("Company holidays", f"{total_holidays:.1f}")
-    row1_col2.metric("Total PTO days", f"{total_ptos:.1f}")
-    row1_col3.metric("Total Work Days", f"{total_workdays:.1f}")
+day_store = components.declare_component("day_store", path=str(ROOT / "components" / "day_store"))
+ss = st.session_state
 
 
-    row2_col1, row2_col2, row2_col3 = st.columns(3)
-    row2_col1.metric("Total Required Office Days", f"{total_office_days:.1f}")
-    row2_col2.metric("Avg Monthly Office Days", f"{avg_monthly_office_days:.1f}")
-    
-    # Create tabs for table and chart
-    chart_tab, table_tab = st.tabs(["Monthly Visualization", "Detailed Monthly Table"])
-    
-    # Convert data to DataFrame
-    df = pd.DataFrame(monthly_data)
-    
-    # Show chart in first tab
-    with chart_tab:
-        fig = px.bar(df, 
-                    x='Month', 
-                    y=['Office Days Required', 'PTO Days'],
-                    title='Monthly Office Days Required vs PTO',
-                    barmode='group')
-        fig.update_layout(
-            xaxis_title="Month",
-            yaxis_title="Days",
-            legend_title="Category",
-            height=500  # Make the chart a bit taller
+# ------------------------------------------------------------------ helpers
+
+
+def load_css() -> str:
+    app = (ROOT / "theme" / "app.css").read_text()
+    head, _, body = app.partition("/* --- app --- */")
+    tokens = (ROOT / "theme" / "tokens.css").read_text()
+    base = (ROOT / "theme" / "base.css").read_text()
+    return f"{head}\n{tokens}\n{base}\n{body}"
+
+
+def html(markup: str):
+    st.html(markup)
+
+
+def fmt_day(d: date) -> str:
+    return f"{d:%a, %b} {d.day}"
+
+
+def fmt_month(d: date) -> str:
+    return f"{d:%B %Y}"
+
+
+def plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def apply_state(policy: rl.Policy, office: set, pto: set):
+    """Put a policy and its days into the session, widgets included."""
+    ss.office, ss.pto = set(office), set(pto)
+    ss.p_start, ss.p_end = policy.start, policy.end
+    ss.workdays_percentage = float(policy.percent)
+    ss.pto_accounting_policy = MODE_LABELS[policy.pto_mode]
+    ss.extended_christmas_break = policy.christmas_break
+    ss.pto_allowance = int(policy.pto_allowance)
+    ss.valid_policy = policy
+
+
+def current_policy() -> rl.Policy:
+    """The policy in the sidebar; the last valid one if the dates are wrong."""
+    try:
+        policy = rl.Policy(
+            start=ss.p_start,
+            end=ss.p_end,
+            percent=float(ss.workdays_percentage),
+            pto_mode=next(k for k, v in MODE_LABELS.items() if v == ss.pto_accounting_policy),
+            christmas_break=bool(ss.extended_christmas_break),
+            pto_allowance=int(ss.pto_allowance),
         )
-        st.plotly_chart(fig, use_container_width=True)
+    except (ValueError, TypeError, StopIteration):
+        ss.policy_error = True
+        return ss.valid_policy
+    ss.policy_error = False
+    ss.valid_policy = policy
+    return policy
 
-    # Show table in second tab
-    with table_tab:
-        st.dataframe(df, hide_index=True, use_container_width=True)
-    
-    with st.container(border = True):
-        st.subheader("✨ Use AI to help for PTO Planning ✨")
-        st.write("AI can make mistake, use the feature carefully and verify the result.")
-        ai_pto_factor = st.radio("Do you want AI to factor in PTO you have already planned (entered)?", 
-                ["Yes, and plan additional PTOs", "No, help me plan from scratch"],
-                key="ai_pto_factor")
-        if st.session_state.ai_pto_factor == "No, help me plan from scratch":
-            ai_pto_days=st.number_input(
-                'How many PTOs total do you want to take?',
-                min_value=0.0,
-                max_value=60.0,
-                value=3.0,
-                step = 0.5, 
-                key="ai_pto_days"
-            )
-            monthly_data = []
-            for month, workdays in monthly_workdays.items():
-                if st.session_state.pto_accounting_policy == 'PTO subtracted from workdays':
-                    net_days = workdays
-                    office_days = math.floor(net_days * 0.6, 0)
-                else:
-                    net_days = workdays
-                    office_days = math.floor(net_days * 0.6, 0)
-                monthly_data.append({
-                    'Month': pd.to_datetime(month + "-01").strftime("%b %Y"),
-                    'Work Days': workdays,
-                    'PTO Days': 0,
-                    'Net Work Days': net_days,
-                    'Office Days Required': office_days
-                })
-            
-        st.text_input(label="What other criteria do you want AI to consider?",
-                    placeholder='eg. I want to take 2 weeks off in July',
-                    key="ai_pto_additional_criteria")
-        
-        additional_info =f"""
-        Here is the additional info to consider:
 
-        Total PTO I want to take: {st.session_state.ai_pto_days}
+# ---------------------------------------------------------------- callbacks
 
-        Additional criteria: {st.session_state.ai_pto_additional_criteria}
-        """
-        pto_allowance=st.session_state.pto_allowance
-        office_day_formula = required_office_days_formula(st.session_state.pto_accounting_policy)
-        show_ai_button(monthly_data, monthly_workdays, holidays, additional_info, pto_allowance, office_day_formula)
 
-def show_ai_button(monthly_data, monthly_workdays, holidays, additional_info=None, pto_allowance=None, office_day_formula=None):
-    if st.button("🪄AI Suggest PTO Plan", type='primary'):
-        with st.spinner("Thinking...feel free to grab a beverage while you wait"):
-            prompt = f"""
-            Use the monthly data and holidays to help me optimize my PTO plan.
-            I have a total {pto_allowance} number of PTO days to take in this period.
-
-            Focus on which month I should take PTO to minimize the total office days required.
-            Factor in weekends and company holidays to maximize day offs.
-            Do not suggest day offs between Christmas and New year since this is already a company holiday.
-            Also avoid suggesting taking day off for a whole week if I need to take Monday to Friday off using PTOs.
-
-            Here is the monthly data of how many work days, holidays, PTO days and office days required for each month:
-            {monthly_data}\n
-
-            Here are the company holidays during this period:
-            {holidays}\n
-
-            Here are additional criteria I want you to consider:
-            {additional_info}\n
-
-            Use this formula and calculator tool to calculate the required office days:\n
-            {office_day_formula}
-
-            Think carefully about my additional criteria, understand what it means before you give me suggestions.
-
-            Use this format for your suggestions:\n
-            **Overall summary**: \n
-            [summary of the strategy]
-
-            PTO strategy by month:
-            - Month: [Month]
-             - PTO Days: [Number of PTO Days]
-             - Total required office days: [Number of days to go into office subtracting the suggested PTO and holidays]
-             - Dates to take: [Dates to take PTO to maximize day offs including weekends and holidays]
-            """
-            output = asyncio.run(calculator_tool(prompt))
-            formatted_output = output[-1].content
-        
-        st.markdown(f"**AI Suggested PTO Plan**:\n {formatted_output}")        
-
-def reset_global_var():
-    st.session_state.monthly_data = None
-    st.session_state.monthly_workdays = None
-    st.session_state.total_pto = 0
-
-def required_office_days_formula(pto_accounting_policy):
-    if pto_accounting_policy == 'PTO subtracted from workdays':
-        formula = """
-        The formula of required office day is: [(Number of workday - PTO days) * 0.6]
-
-        For example, if there are 22 work days, and I take 10 PTO, then required office day is (22-10)*0.6 = 7.2 days
-        """
+def toggle_day(d: date):
+    mine, other = (ss.office, ss.pto) if ss.get("mark_mode") != MARK_PTO else (ss.pto, ss.office)
+    if d in mine:
+        mine.discard(d)
     else:
-        formula = """
-        The formula of required office day is: [Number of workday * 0.6 - PTO days] \n
-        For example, if there are 22 work days, and I take 10 PTO, then required office day is 22*0.6 - 10  = 3.2 days
-        """
-    return formula
-
-def init_session_state():
-    """Initialize session state variables."""
-    if 'reset_specific_pto' not in st.session_state:
-        st.session_state.reset_specific_pto = False
-    if 'tab' not in st.session_state:
-        st.session_state.tab = 'Option1: Avg PTO per month'
-    if 'avg_pto' not in st.session_state:
-        st.session_state.avg_pto = 1.0
-    if 'pto_default_value' not in st.session_state:
-        st.session_state.pto_default_value = 0.0
-    if 'total_pto' not in st.session_state:
-        st.session_state.total_pto = 0.0
-    if 'pto_accounting_policy' not in st.session_state:
-        st.session_state.pto_accounting_policy = 'PTO subtracted from workdays'
-    if 'ai_pto_factor' not in st.session_state:
-        st.session_state.ai_pto_factor = 'Yes, and plan additional PTOs'
-    if 'ai_pto_days' not in st.session_state:
-        st.session_state.ai_pto_days = 0
+        mine.add(d)
+        other.discard(d)
 
 
-#####START OF THE APP ########
-init_session_state() # Initialize session state variables
+def log_today(d: date):
+    ss.office.add(d)
+    ss.pto.discard(d)
 
-st.title("Return to Office Calculator")
-st.write("Calculate your required office days based on the RTO policy")
 
-#Side bar expanders for PTO inputs
+def undo_today(d: date):
+    ss.office.discard(d)
+
+
+def shift_month(step: int):
+    y, m = ss.view_month.year, ss.view_month.month + step
+    ss.view_month = date(y + (m - 1) // 12, (m - 1) % 12 + 1, 1)
+
+
+def add_plan(dates):
+    ss.pto.update(dates)
+    ss.office.difference_update(dates)
+
+
+def restore_backup():
+    upload = ss.get("backup_file")
+    if upload is None:
+        return
+    policy, office, pto = rl.load_state(upload.getvalue().decode("utf-8", "replace"), ss.today)
+    apply_state(policy, office, pto)
+    ss.restored = True
+
+
+def clear_days():
+    ss.office, ss.pto = set(), set()
+    ss.confirm_clear = False
+
+
+# ------------------------------------------------------------------- start
+
+html(f"<style>{load_css()}</style>")
+
+# The saved state round trip. Callbacks have already run, so the session
+# holds the newest state and it can be handed to the browser right here.
+payload = None
+if ss.get("hydrated"):
+    payload = rl.dump_state(current_policy(), ss.office, ss.pto)
+with st.container(key="store"):
+    saved = day_store(save=payload, key="day_store", default=None)
+
+if not ss.get("hydrated"):
+    if saved is None and not ss.get("skip_saved"):
+        html(
+            '<div class="loading" role="status"><p class="wordmark">RTO calculator</p>'
+            "<p>Looking for the days you saved in this browser…</p></div>"
+        )
+        st.button("Start without them", key="skip_saved_btn", on_click=lambda: ss.update(skip_saved=True))
+        st.stop()
+    try:
+        ss.today = date.fromisoformat((saved or {}).get("today", ""))
+    except ValueError:
+        ss.today = date.today()
+    apply_state(*rl.load_state((saved or {}).get("raw"), ss.today))
+    ss.first_visit = not (saved or {}).get("raw")
+    ss.hydrated = True
+    st.rerun()
+
+today: date = ss.today
+
+# ----------------------------------------------------------------- sidebar
+
 with st.sidebar:
-    st.title("Start here!")
-    # Date range selection
-    with st.container():
-        st.subheader("Date Range for RTO calculation")
-        col1, col2 = st.columns(2)
-        with col1:
-            start_date = st.date_input("Start Date", datetime(datetime.today().year, 1, 1))
-        with col2:
-            end_date = st.date_input("End Date", datetime(datetime.today().year, 12, 31))
-        st.checkbox("Holiday between Christmas and New Year?", value=True,key="extended_christmas_break")
-        extended_christmas_break = st.session_state.extended_christmas_break
-    
-    with st.container(border = True):
-        st.subheader("RTO policy")
-        rto_policy = st.number_input(
-            "% of workdays required in office",
-            min_value=0.0,
-            max_value=100.0,
-            value=60.0,
-            step=1.0,
-            key="workdays_percentage",
-            help="Enter the percentage of workdays you are required to be in office"
+    html('<p class="wordmark">RTO calculator</p>')
+    st.header("Your policy")
+    st.date_input("Start Date", key="p_start")
+    st.date_input("End Date", key="p_end")
+    st.number_input(
+        "% of workdays required in office",
+        min_value=0.0, max_value=100.0, step=1.0, key="workdays_percentage",
+        help="The share of each month's workdays you are required to be in the office. "
+        "The result is rounded down, month by month.",
+    )
+    st.radio(
+        "Choose how PTO is accounted for",
+        list(MODE_LABELS.values()),
+        key="pto_accounting_policy",
+        help="Subtracted from workdays: a PTO day shrinks the month before the percentage is applied. "
+        "As a day in office: the month is not changed, and a PTO day counts as a day in.",
+    )
+    st.checkbox("Holiday between Christmas and New Year?", key="extended_christmas_break")
+    st.number_input(
+        "PTO allowance",
+        min_value=0, max_value=60, step=1, key="pto_allowance",
+        help="Total PTO days for the period, carry-over included.",
+    )
+
+    policy = current_policy()
+    if ss.get("policy_error"):
+        st.error("The end date is before the start date. Showing the last period that worked.")
+
+    st.header("Your data")
+    st.caption(
+        "Your policy and days are saved in this browser only. "
+        "Nothing is sent to a server, and another browser or device starts empty."
+    )
+    st.download_button(
+        "Download a backup",
+        data=rl.dump_state(policy, ss.office, ss.pto),
+        file_name="rto-days.json", mime="application/json", width="stretch",
+    )
+    st.file_uploader("Restore a backup", type=["json"], key="backup_file", on_change=restore_backup)
+    if ss.get("confirm_clear"):
+        st.warning("This removes every office day and PTO day you have marked.")
+        b1, b2 = st.columns(2)
+        b1.button("Yes, clear", on_click=clear_days, width="stretch")
+        b2.button("Keep them", on_click=lambda: ss.update(confirm_clear=False), width="stretch")
+    else:
+        st.button(
+            "Clear my days", on_click=lambda: ss.update(confirm_clear=True), width="stretch",
+            disabled=not (ss.office or ss.pto),
         )
 
+summary = rl.summarize(policy, ss.office, ss.pto, today)
+holidays = rl.company_holidays(policy.start, policy.end, policy.christmas_break)
+workday_set = set(rl.workdays_between(policy.start, policy.end, holidays))
+in_period = policy.start <= today <= policy.end
 
-    st.subheader("PTO Planning")
-    with st.expander("PTO days you have in this period", expanded = True):
-        total_pto_allowance = st.number_input(
-                                    "PTO allowance",
-                                    min_value=0.0,
-                                    max_value=60.0,
-                                    value=20.0,
-                                    step=0.5,
-                                    key="pto_allowance",
-                                    help="Enter total PTO allowance for the period, this may include carry-over PTO days"
-                                )
-    
-    with st.expander("PTO accounting policy", expanded = True):
-        pto_accounting_policy = st.radio(
-            'Choose how PTO is accounted for', 
-            ['PTO subtracted from workdays', 'PTO as a day in office'],
-            horizontal=True,
-            key='pto_accounting_policy', 
-            help="""
-            PTO subtracted from work days means the total number of work days are reduced by number of PTO you take. 
-            PTO as a day in office means total number of work day is not impacted, but a PTO is considered as a day in office.
-            """
-        )
-        if st.session_state.pto_accounting_policy != pto_accounting_policy:
-            st.session_state.pto_accounting_policy = pto_accounting_policy
+# ------------------------------------------------------------------ header
 
-    with st.expander("Choose how you want to plan your PTO days", expanded = True):
-        tab = st.radio(
-                        "Choose an option:",
-                        ["Option1: Avg PTO per month", "Option2: PTO for each month"],
-                        horizontal=True,
-                        key="pto_selector", 
-                        index = 0, 
-                        help="""Choose how you want to plan your PTO days. First option is a quick way to see PTO impact 
-                        if you have an idea of the average number of PTO you take a month.
-                        If you have specific PTO days for individual month, choose the second option.
-                        """
-                )
-        if st.session_state.tab != tab:
-            st.session_state.tab = tab
-#Tabs for PTO app & Company holiday views
+cur = summary.current
+if cur is None:
+    head = "Today is outside your period"
+    sub = f"The period runs {fmt_day(policy.start)}, {policy.start.year} to {fmt_day(policy.end)}, {policy.end.year}."
+elif cur.required == 0:
+    head = f"No office days needed in {cur.first:%B}"
+    sub = f"{plural(cur.workdays, 'workday')} this month, {cur.pto} on PTO."
+elif cur.remaining == 0:
+    head = f"{cur.first:%B} is covered"
+    sub = f"{cur.attended} of {cur.required} office days logged."
+elif cur.shortfall:
+    head = f"{cur.first:%B} needs {plural(cur.remaining, 'more day')}"
+    sub = (
+        f"{cur.attended} of {cur.required} logged, and only "
+        f"{plural(cur.left, 'free workday')} left this month."
+    )
+else:
+    head = f"{plural(cur.remaining, 'more office day')} in {cur.first:%B}"
+    sub = f"{cur.attended} of {cur.required} logged, {plural(cur.left, 'free workday')} left to pick from."
 
-app_tab, holiday_tab = st.tabs(["PTO Planner", "Company Holidays"])
-
-with app_tab:
-    #Option 1: use average PTO days per month
-    if st.session_state.tab == "Option1: Avg PTO per month":
-        reset_global_var()
-        with st.container(border = True):
-            monthly_pto = st.slider("Select average PTO days taken per month", 
-                                    min_value=0.0, 
-                                    max_value=7.0, 
-                                    value=0.0,
-                                    step=0.5,
-                                    help="Select average number of PTO days you plan to take per month")
-            #Get number of holidays
-            holidays = get_custom_holidays(start_date, end_date, extended_christmas_break)['holiday_dates']
-
-            # Calculate workdays for the entire period
-            total_workdays = calculate_workdays(start_date, end_date)
-            
-            # Calculate monthly breakdown
-            monthly_workdays = calculate_monthly_workdays(start_date, end_date)
-            
-            # Calculate office days (60% of workdays minus PTO)
-            months_count = len(monthly_workdays)
-            total_pto = monthly_pto * months_count
-            st.session_state.total_pto = total_pto
-            monthly_pto_avg = monthly_pto
-            st.markdown(f"**Total PTO planned in this period: {total_pto:.1f} days**")
-
-        if total_pto <= total_pto_allowance:
-            # Calculate monthly data
-            monthly_data = []
-            for month, workdays in monthly_workdays.items():
-                if st.session_state.pto_accounting_policy == 'PTO subtracted from workdays':
-                    net_days = workdays - monthly_pto_avg
-                    office_days = math.floor(net_days * ( rto_policy * 0.01))
-                else:
-                    net_days = workdays
-                    office_days = math.floor(net_days * (rto_policy * 0.01)) - monthly_pto_avg
-                monthly_data.append({
-                    'Month': pd.to_datetime(month + "-01").strftime("%b %Y"),
-                    'Work Days': workdays,
-                    'PTO Days': monthly_pto,
-                    'Net Work Days': net_days,
-                    'Office Days Required': office_days
-                })
-            display_metrics_and_charts(monthly_data, monthly_workdays, holidays)
+top_l, top_r = st.columns([5, 2], vertical_alignment="bottom")
+with top_l:
+    html(
+        f"<h1>{escape(head)}</h1><p class=\"lead\">{escape(sub)}</p>"
+    )
+with top_r:
+    with st.container(key="today_action"):
+        if today in ss.office:
+            st.button("Undo today's log", on_click=undo_today, args=(today,), width="stretch")
         else:
-            st.error("Total PTO exceeds allowance!")
-            pass
+            st.button(
+                "I'm in today", type="primary", on_click=log_today, args=(today,), width="stretch",
+                disabled=today not in workday_set,
+                help=None if today in workday_set else "Today is not a workday in your period.",
+            )
 
-    #option 2: PTO for each month
-    elif st.session_state.tab == "Option2: PTO for each month":
-        reset_global_var()
-        if start_date and end_date and start_date <= end_date:
-            #Get number of holidays
-            holidays = get_custom_holidays(start_date, end_date, extended_christmas_break)['holiday_dates']
-            # Calculate monthly workdays
-            monthly_workdays = calculate_monthly_workdays(start_date, end_date)
-            # Create columns for PTO inputs
-            with st.container(border = True):
-                st.write('Enter PTO days for each month')
-                cols_per_row = 4
-                monthly_pto = {}
-                # Create rows of columns for better layout
-                months = list(monthly_workdays.keys())
-                for i in range(0, len(months), cols_per_row):
-                    cols = st.columns(cols_per_row)
-                    for j, col in enumerate(cols):
-                        if i + j < len(months):
-                            month = months[i + j]
-                            # Format month for display (e.g., "2024-01" to "Jan 2024")
-                            display_month = pd.to_datetime(month + "-01").strftime("%b %Y")
-                            monthly_pto[month] = col.number_input(
-                                display_month,
-                                min_value=0.0,
-                                max_value=float(monthly_workdays[month]),
-                                value=st.session_state.pto_default_value,
-                                step=0.5,
-                                key=f"pto_{month}"
-                            )
-                # Calculate total PTO
-                total_pto = sum(monthly_pto.values())
-                st.session_state.total_pto = total_pto
-                monthly_pto_avg = total_pto/len(months)
-                
-                # Display total PTO with warning if over 30 days
-                st.markdown(f"**Total PTO planned in this period: {total_pto:.1f} days**")
-            
-            if total_pto <= total_pto_allowance:
-                # Calculate monthly data
-                monthly_data = []
-                for month, workdays in monthly_workdays.items():
-                    if st.session_state.pto_accounting_policy == 'PTO subtracted from workdays':
-                        net_days = workdays - monthly_pto[month]
-                        office_days = round(net_days * 0.6, 0)
+pto_note = f"of {policy.pto_allowance} allowed"
+ahead = [m for m in summary.months if not m.is_past]
+still_note = f"from {ahead[0].first:%B} on" if ahead and ahead[0].first > policy.start else "in this period"
+if not ahead:
+    still_note = "the period has ended"
+stats = [
+    ("Required this period", summary.required, f"{policy.percent:g}% of {summary.workdays} workdays, by month"),
+    ("Been in", summary.attended, "days you have logged"),
+    ("Still to go", summary.remaining_ahead, still_note),
+    ("PTO placed", summary.pto, pto_note),
+]
+html(
+    '<dl class="stats">'
+    + "".join(
+        f'<div><dt>{escape(label)}</dt><dd class="num">{value}</dd><dd class="note">{escape(note)}</dd></div>'
+        for label, value, note in stats
+    )
+    + "</dl>"
+)
+if summary.pto > policy.pto_allowance:
+    st.warning(
+        f"You have placed {summary.pto} PTO days, "
+        f"{summary.pto - policy.pto_allowance} more than your allowance of {policy.pto_allowance}."
+    )
+if ss.pop("restored", False):
+    st.success("Backup restored.")
+
+track_tab, plan_tab, month_tab, holiday_tab = st.tabs(["Track", "Plan PTO", "By month", "Company Holidays"])
+
+# ------------------------------------------------------------------- track
+
+with track_tab:
+    first_month = policy.start.replace(day=1)
+    last_month = policy.end.replace(day=1)
+    if "view_month" not in ss:
+        ss.view_month = today.replace(day=1)
+    ss.view_month = min(max(ss.view_month, first_month), last_month)
+    vm: date = ss.view_month
+    msum = next(m for m in summary.months if m.key == rl.month_key(vm))
+
+    if "mark_mode" not in ss or ss.mark_mode is None:
+        ss.mark_mode = MARK_OFFICE
+    bar_l, bar_r = st.columns([3, 2], vertical_alignment="bottom")
+    with bar_l, st.container(key="monthnav"):
+        n1, n2, n3 = st.columns([1, 5, 1], vertical_alignment="center")
+        n1.button(
+            "", icon=":material/chevron_left:", key="prev_month", on_click=shift_month, args=(-1,),
+            disabled=vm <= first_month, help="Previous month", width="stretch",
+        )
+        with n2:
+            html(
+                f'<h2 class="month">{fmt_month(vm)}</h2>'
+                f'<p class="month-note">{msum.attended} of {msum.required} office days, {msum.pto} PTO</p>'
+            )
+        n3.button(
+            "", icon=":material/chevron_right:", key="next_month", on_click=shift_month, args=(1,),
+            disabled=vm >= last_month, help="Next month", width="stretch",
+        )
+    with bar_r:
+        st.segmented_control(
+            "Tap a day to mark it as", [MARK_OFFICE, MARK_PTO], key="mark_mode", width="stretch",
+        )
+
+    with st.container(key="tray"):
+        html(
+            '<div class="tray-head" aria-hidden="true">'
+            + "".join(f"<span>{d}</span>" for d in ("Mon", "Tue", "Wed", "Thu", "Fri"))
+            + "</div>"
+        )
+        for week in calendar.Calendar(firstweekday=0).monthdatescalendar(vm.year, vm.month):
+            days = [d for d in week[:5]]
+            if not any(d.month == vm.month for d in days):
+                continue
+            cols = st.columns(5, gap="small")
+            for col, d in zip(cols, days):
+                with col:
+                    if d.month != vm.month or not (policy.start <= d <= policy.end):
+                        html('<div class="day-gap"></div>')
+                        continue
+                    tag = f"w{d.weekday()}" + ("-now" if d == today else "")
+                    iso = d.isoformat()
+                    if d in holidays:
+                        st.button(
+                            str(d.day), key=f"day-hol-{tag}-{iso}", disabled=True, width="stretch",
+                            help=holidays[d], icon=":material/celebration:",
+                        )
+                    elif d in ss.pto:
+                        st.button(
+                            str(d.day), key=f"day-pto-{tag}-{iso}", icon=":material/beach_access:",
+                            on_click=toggle_day, args=(d,), width="stretch",
+                        )
+                    elif d in ss.office:
+                        st.button(
+                            str(d.day), key=f"day-in-{tag}-{iso}", icon=":material/check:",
+                            on_click=toggle_day, args=(d,), width="stretch",
+                        )
                     else:
-                        net_days = workdays
-                        office_days = round(net_days * 0.6, 0) - monthly_pto[month]
-                    monthly_data.append({
-                        'Month': pd.to_datetime(month + "-01").strftime("%b %Y"),
-                        'Work Days': workdays,
-                        'PTO Days': monthly_pto[month],
-                        'Net Work Days': net_days,
-                        'Office Days Required': office_days
-                    })
-                display_metrics_and_charts(monthly_data, monthly_workdays, holidays)
+                        st.button(
+                            str(d.day), key=f"day-free-{tag}-{iso}",
+                            on_click=toggle_day, args=(d,), width="stretch",
+                        )
+
+    html(
+        '<ul class="legend">'
+        '<li><span class="key key-in"></span>In office</li>'
+        '<li><span class="key key-pto"></span>PTO</li>'
+        '<li><span class="key key-hol"></span>Company holiday</li>'
+        '<li><span class="key key-now"></span>Today</li>'
+        "</ul>"
+    )
+    if ss.get("first_visit") and not (ss.office or ss.pto):
+        st.caption(
+            "Nothing logged yet. Tap the days you were in the office, "
+            "or switch to PTO and tap the days you are taking off."
+        )
+
+# -------------------------------------------------------------------- plan
+
+with plan_tab:
+    left_pto = max(0, policy.pto_allowance - summary.pto)
+    if left_pto == 0:
+        html(
+            "<h2>No PTO days left to place</h2>"
+            f'<p class="lead">All {policy.pto_allowance} days of your allowance are on the calendar. '
+            "Raise the allowance in the sidebar, or clear a PTO day on the Track tab.</p>"
+        )
+    else:
+        html(
+            "<h2>Where to put your PTO</h2>"
+            '<p class="lead">Each day goes where it cuts the most office days, '
+            "then where it buys the longest stretch off.</p>"
+        )
+        p1, p2, _ = st.columns([2, 2, 3])
+        budget = p1.number_input(
+            "PTO days to place", min_value=1, max_value=left_pto, value=left_pto, step=1,
+            help=f"You have {left_pto} of {policy.pto_allowance} PTO days not yet on the calendar.",
+        )
+        cap = p2.number_input(
+            "Most PTO days in one break", min_value=1, max_value=10, value=4, step=1, key="plan_cap",
+            help="Keeps the plan from spending a whole week of PTO in one go. Raise it for longer trips.",
+        )
+        plan = rl.plan_pto(policy, ss.office, ss.pto, today, int(budget), int(cap))
+        if not plan.dates:
+            st.info("There are no free workdays left in the period to place PTO on.")
+        else:
+            n = len(plan.dates)
+            if plan.office_days_saved:
+                line = (
+                    f"{plural(n, 'PTO day')} would take your office days still to go "
+                    f"from {plan.remaining_before} to {plan.remaining_after}."
+                )
             else:
-                st.error("Total PTO exceeds allowance!")
-                pass
+                line = (
+                    f"{plural(n, 'PTO day')} would not lower the requirement, "
+                    "but each one stretches a weekend or a holiday."
+                )
+            rows = "".join(
+                "<tr>"
+                f"<td>{fmt_day(b.start)} to {fmt_day(b.end)}</td>"
+                f'<td class="num">{b.days_off}</td>'
+                f"<td>{', '.join(fmt_day(d) for d in b.pto_dates)}</td>"
+                "</tr>"
+                for b in plan.breaks
+            )
+            html(
+                f'<p class="plan-line">{escape(line)}</p>'
+                '<table class="sheet"><thead><tr><th>Time off</th>'
+                '<th class="num">Days off in a row</th><th>PTO days to book</th></tr></thead>'
+                f"<tbody>{rows}</tbody></table>"
+            )
+            if n < budget:
+                st.caption(
+                    f"Only {n} of the {budget} days fit: the rest would break the cap on one break "
+                    "or leave a month without enough free days to meet the policy."
+                )
+            st.button(
+                f"Add {plural(n, 'day')} to my PTO", on_click=add_plan, args=(plan.dates,), key="add_plan",
+            )
+
+# ---------------------------------------------------------------- by month
+
+with month_tab:
+    rows = []
+    for m in summary.months:
+        done = min(m.attended, m.required)
+        pct = 100 if m.required == 0 else round(100 * done / m.required)
+        if m.required == 0:
+            state = "None needed"
+        elif m.remaining == 0:
+            state = "Covered"
+        elif m.is_past:
+            state = f"{m.remaining} not logged"
+        elif m.shortfall:
+            state = f"{m.remaining} to go, {m.left} free"
+        else:
+            state = f"{m.remaining} to go"
+        rows.append(
+            f'<tr class="{"is-now" if m.is_current else ""}">'
+            f"<th scope=\"row\">{m.first:%b %Y}</th>"
+            f'<td class="num">{m.workdays}</td><td class="num">{m.pto}</td>'
+            f'<td class="num">{m.required}</td><td class="num">{m.attended}</td>'
+            f'<td><span class="meter" role="img" aria-label="{done} of {m.required} office days">'
+            f'<span style="inline-size:{pct}%"></span></span></td>'
+            f"<td>{state}</td></tr>"
+        )
+    html(
+        '<table class="sheet"><thead><tr><th>Month</th><th class="num">Workdays</th>'
+        '<th class="num">PTO</th><th class="num">Required</th><th class="num">Been in</th>'
+        "<th>Progress</th><th>Status</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        f'<tfoot><tr><th scope="row">Period</th><td class="num">{summary.workdays}</td>'
+        f'<td class="num">{summary.pto}</td><td class="num">{summary.required}</td>'
+        f'<td class="num">{summary.attended}</td><td></td><td>{summary.remaining_ahead} to go</td></tr></tfoot>'
+        "</table>"
+    )
+
+# ---------------------------------------------------------------- holidays
 
 with holiday_tab:
-    st.subheader("Company Holidays")
-    holidays_df = get_custom_holidays(start_date, end_date, extended_christmas_break)['holiday_df']
-    holidays_df['Date'] = holidays_df['Date'].dt.strftime('%b %d, %Y')
-    st.dataframe(holidays_df, hide_index=True, use_container_width=True)
+    if not holidays:
+        st.info("No company holidays fall inside this period.")
+    else:
+        html(
+            '<table class="sheet"><thead><tr><th>Date</th><th>Holiday Name</th></tr></thead><tbody>'
+            + "".join(
+                f"<tr><td>{fmt_day(d)}, {d.year}</td><td>{escape(name)}</td></tr>"
+                for d, name in holidays.items()
+            )
+            + "</tbody></table>"
+        )
