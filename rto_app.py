@@ -317,7 +317,7 @@ with st.sidebar:
         "% of workdays required in office",
         min_value=0.0, max_value=100.0, step=1.0, key="workdays_percentage",
         help="The share of each month's workdays you are required to be in the office. "
-        "The result is rounded down, month by month.",
+        "The result is rounded up to a whole day, month by month.",
     )
     with st.container(key="counts"):
         html('<p class="group-label">Counts as a day in office</p>')
@@ -387,16 +387,16 @@ elif cur.required == 0:
     sub = f"{plural(cur.workdays, 'workday')} this month, {cur.pto + cur.sick + cur.other} of them off."
 elif cur.remaining == 0:
     head = f"{cur.first:%B} is covered"
-    sub = f"{cur.attended} of {cur.required} office days logged."
+    sub = f"{cur.attended + cur.credit} of {cur.total} required days counted."
 elif cur.shortfall:
     head = f"{cur.first:%B} needs {plural(cur.remaining, 'more day')}"
     sub = (
-        f"{cur.attended} of {cur.required} logged, and only "
+        f"{cur.attended + cur.credit} of {cur.total} counted, and only "
         f"{plural(cur.left, 'free workday')} left this month."
     )
 else:
     head = f"{plural(cur.remaining, 'more office day')} in {cur.first:%B}"
-    sub = f"{cur.attended} of {cur.required} logged, {plural(cur.left, 'free workday')} left to pick from."
+    sub = f"{cur.attended + cur.credit} of {cur.total} counted, {plural(cur.left, 'free workday')} left to pick from."
 
 paces = []
 if cur is not None:
@@ -433,9 +433,10 @@ logged = [d for d in month_days if d in ss.office and d not in away_days]
 been = sum(1 for d in logged if d <= today)
 planned = len(logged) - been
 leave = sm.pto + sm.sick + sm.other
-basis = f"{policy.percent:g}% of {plural(sm.base, 'day')}"
+basis = f"{policy.percent:g}% of {plural(sm.base, 'day')}, rounded up"
+in_note = "logged so far, and marked ahead"
 if sm.credit:
-    basis += f", less {sm.credit} that count as in"
+    in_note += f". {plural(sm.credit, 'more day')} count as in"
 if sm.required == 0:
     go_note = "nothing needed this month"
 elif sm.remaining == 0:
@@ -444,8 +445,8 @@ else:
     go_note = f"{plural(sm.left, 'free workday')} left"
 leave_parts = [f"{sm.pto} PTO"] + ([f"{sm.sick} sick"] if sm.sick else []) + ([f"{sm.other} other"] if sm.other else [])
 stats = [
-    (f"Required in {sm.first:%B}", sm.required, basis),
-    ("Been / planned in", f"{been} / {planned}", "days logged so far, and days marked ahead"),
+    (f"Required in {sm.first:%B}", sm.total, basis),
+    ("Been / planned in", f"{been} / {planned}", in_note),
     ("Still to go", sm.remaining, go_note),
     ("PTO and leave days", leave, ", ".join(leave_parts) + f". {summary.pto} of {policy.pto_allowance} PTO used this period"),
 ]
@@ -488,7 +489,7 @@ with track_tab:
             off = msum.pto + msum.sick + msum.other
             html(
                 f"<h2>{fmt_month(vm)}</h2>"
-                f'<p class="month-note">{msum.attended} of {msum.required} office days, '
+                f'<p class="month-note">{msum.attended + msum.credit} of {msum.total} required days counted, '
                 f"{plural(off, 'day')} off. Point at a day, or tap it, to mark it.</p>"
             )
         n3.button(
@@ -641,8 +642,8 @@ with plan_tab:
 with month_tab:
     rows = []
     for m in summary.months:
-        done = min(m.attended, m.required)
-        pct = 100 if m.required == 0 else round(100 * done / m.required)
+        done = min(m.attended + m.credit, m.total)
+        pct = 100 if m.total == 0 else round(100 * done / m.total)
         if m.required == 0:
             status = "None needed"
         elif m.remaining == 0:
@@ -658,21 +659,21 @@ with month_tab:
             f"<th scope=\"row\">{m.first:%b %Y}</th>"
             f'<td class="num">{m.workdays}</td><td class="num">{m.pto}</td>'
             f'<td class="num">{m.sick + m.other}</td>'
-            f'<td class="num">{m.required}</td><td class="num">{m.attended}</td>'
+            f'<td class="num">{m.total}</td><td class="num">{m.credit}</td><td class="num">{m.attended}</td>'
             f'<td class="num">{m.share:.0f}%</td>'
-            f'<td><span class="meter" role="img" aria-label="{done} of {m.required} office days">'
+            f'<td><span class="meter" role="img" aria-label="{done} of {m.total} required days counted">'
             f'<span style="inline-size:{pct}%"></span></span></td>'
             f"<td>{status}</td></tr>"
         )
     html(
         '<table class="sheet sheet-months"><thead><tr><th>Month</th><th class="num">Workdays</th>'
         '<th class="num">PTO</th><th class="num">Sick and other</th>'
-        '<th class="num">Required</th><th class="num">Been in</th><th class="num">In office</th>'
+        '<th class="num">Required</th><th class="num">Count as in</th><th class="num">Been in</th><th class="num">In office</th>'
         "<th>Progress</th><th>Status</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody>"
         f'<tfoot><tr><th scope="row">Period</th><td class="num">{summary.workdays}</td>'
         f'<td class="num">{summary.pto}</td><td class="num">{summary.sick + summary.other}</td>'
-        f'<td class="num">{summary.required}</td>'
+        f'<td class="num">{summary.total}</td><td class="num">{summary.credit}</td>'
         f'<td class="num">{summary.attended}</td><td class="num">{summary.share:.0f}%</td><td></td>'
         f"<td>{summary.remaining_ahead} to go</td></tr></tfoot>"
         "</table>"

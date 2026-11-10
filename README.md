@@ -6,7 +6,8 @@ deciding where to put PTO. Live at https://rto-calculate.streamlit.app/.
 
 ## What it does
 
-- **Required days.** A percentage of each month's workdays, rounded down.
+- **Required days.** A percentage of each month's workdays, rounded up to a
+  whole day (21 days at 60% is 13).
   A workday is a weekday that is not a company holiday (US federal holidays,
   the day after Thanksgiving and, optionally, the Christmas break).
 - **Tracking.** Point at a day (or tap it) and a wheel of marks opens around

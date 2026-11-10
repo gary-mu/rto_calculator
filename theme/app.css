@@ -163,7 +163,7 @@
   .paces { grid-template-columns: minmax(0, 1fr); }
   .stApp [data-testid="stTab"] { padding: 0 var(--space-md); }
   .stApp [data-testid="stTab"] p { font-size: var(--text-md); }
-  .sheet-months th:nth-child(2), .sheet-months td:nth-child(2), .sheet-months th:nth-child(4), .sheet-months td:nth-child(4), .sheet-months th:nth-child(8), .sheet-months td:nth-child(8) { display: none; }
+  .sheet-months th:nth-child(2), .sheet-months td:nth-child(2), .sheet-months th:nth-child(3), .sheet-months td:nth-child(3), .sheet-months th:nth-child(4), .sheet-months td:nth-child(4), .sheet-months th:nth-child(9), .sheet-months td:nth-child(9) { display: none; }
   .stApp .sheet th, .stApp .sheet td { padding-inline-end: var(--space-xs); }
 }
 @media (prefers-reduced-motion: reduce) {

@@ -15,17 +15,18 @@ JAN1 = date(2026, 1, 1)
 @pytest.mark.parametrize(
     "workdays, pto, percent, mode, expected",
     [
-        (22, 0, 60, PTO_SUBTRACT, 13),  # 13.2 rounds down
-        (22, 10, 60, PTO_SUBTRACT, 7),  # (22 - 10) * 0.6 = 7.2
-        (22, 10, 60, PTO_AS_OFFICE, 3),  # 13 - 10
+        (22, 0, 60, PTO_SUBTRACT, 14),  # 13.2 rounds up
+        (21, 0, 60, PTO_SUBTRACT, 13),  # 12.6 rounds up
+        (22, 10, 60, PTO_SUBTRACT, 8),  # (22 - 10) * 0.6 = 7.2
+        (22, 10, 60, PTO_AS_OFFICE, 4),  # 14 - 10
         (20, 0, 60, PTO_SUBTRACT, 12),
-        (15, 0, 60, PTO_SUBTRACT, 9),  # 9.000000000000002 in floats
+        (15, 0, 60, PTO_SUBTRACT, 9),  # 9.000000000000002 in floats, which would round up to 10
         (100, 0, 57, PTO_SUBTRACT, 57),  # 56.99999999999999 in floats
         (20, 0, 0, PTO_SUBTRACT, 0),
         (20, 0, 100, PTO_SUBTRACT, 20),
         (20, 25, 60, PTO_SUBTRACT, 0),  # more PTO than workdays
         (20, 15, 60, PTO_AS_OFFICE, 0),  # never negative
-        (21, 0, 50, PTO_SUBTRACT, 10),  # 10.5 rounds down
+        (21, 0, 50, PTO_SUBTRACT, 11),  # 10.5 rounds up
     ],
 )
 def test_required_days(workdays, pto, percent, mode, expected):
@@ -66,12 +67,15 @@ def test_day_after_thanksgiving_in_every_year_of_the_period():
     assert hols[date(2026, 11, 27)] == "Day After Thanksgiving"
 
 
-def test_2026_totals_match_the_original_app():
-    """The live app showed 244 workdays and 142 required days for 2026 at 60%."""
+def test_2026_workdays_match_the_original_app_and_months_round_up():
+    """The live app showed 244 workdays for 2026. It rounded each month down
+    (142 days at 60%); each month now rounds up."""
     s = rl.summarize(Y2026, set(), set(), JAN1)
     assert s.workdays == 244
-    assert s.required == 142
-    assert s.remaining == 142
+    assert [m.workdays for m in s.months] == [20, 19, 22, 22, 20, 21, 22, 21, 21, 21, 18, 17]
+    assert [m.required for m in s.months] == [12, 12, 14, 14, 12, 13, 14, 13, 13, 13, 11, 11]
+    assert s.required == s.total == 152
+    assert s.remaining == 152
     assert len(s.months) == 12
 
 
@@ -81,7 +85,7 @@ def test_partial_months_are_clipped_to_the_period():
     assert [m.key for m in s.months] == ["2026-03", "2026-04"]
     assert s.months[0].workdays == 12  # Mar 16 to Mar 31
     assert s.months[1].workdays == 8  # Apr 1 to Apr 10
-    assert s.required == 7 + 4
+    assert s.required == 8 + 5  # 7.2 and 4.8, rounded up
 
 
 # ---------------------------------------------------- tracking and remaining
@@ -92,10 +96,10 @@ def march(*days):
 
 
 def test_remaining_days_after_logging():
-    # March 2026 has 22 workdays, so 13 are required at 60%.
+    # March 2026 has 22 workdays, so 14 are required at 60%.
     s = rl.summarize(Y2026, march(2, 3, 4), set(), date(2026, 3, 9))
     m = next(x for x in s.months if x.key == "2026-03")
-    assert (m.workdays, m.required, m.attended, m.remaining) == (22, 13, 3, 10)
+    assert (m.workdays, m.required, m.attended, m.remaining) == (22, 14, 3, 11)
     assert m.left == 17  # Mar 9 to Mar 31
     assert m.shortfall == 0
     assert m.is_current and s.current is m
@@ -113,15 +117,15 @@ def test_extra_days_do_not_carry_into_another_month():
     s = rl.summarize(Y2026, every_day, set(), date(2026, 4, 1))
     m = next(x for x in s.months if x.key == "2026-03")
     assert m.attended == 22 and m.remaining == 0
-    assert s.counted == 13
-    assert s.remaining == 142 - 13
+    assert s.counted == 14
+    assert s.remaining == 152 - 14
 
 
 def test_shortfall_when_the_month_can_no_longer_be_met():
-    # Mar 26 onward leaves 4 workdays; 13 required, 2 logged.
+    # Mar 26 onward leaves 4 workdays; 14 required, 2 logged.
     s = rl.summarize(Y2026, march(2, 3), set(), date(2026, 3, 26))
     m = next(x for x in s.months if x.key == "2026-03")
-    assert (m.remaining, m.left, m.shortfall) == (11, 4, 7)
+    assert (m.remaining, m.left, m.shortfall) == (12, 4, 8)
     feb = next(x for x in s.months if x.key == "2026-02")
     assert feb.is_past and feb.left == 0 and feb.shortfall == feb.required
 
@@ -129,15 +133,15 @@ def test_shortfall_when_the_month_can_no_longer_be_met():
 def test_still_to_go_leaves_out_closed_months():
     s = rl.summarize(Y2026, march(2, 3), set(), date(2026, 3, 9))
     jan_feb = sum(m.required for m in s.months if m.key < "2026-03")
-    assert s.remaining == 142 - 2
-    assert s.remaining_ahead == 142 - 2 - jan_feb
+    assert s.remaining == 152 - 2
+    assert s.remaining_ahead == 152 - 2 - jan_feb
 
 
 def test_plan_counts_savings_from_the_current_month_on():
     today = date(2026, 11, 10)
     plan = rl.plan_pto(Y2026, set(), set(), today, 4)
     before = rl.summarize(Y2026, set(), set(), today)
-    assert plan.remaining_before == before.remaining_ahead == 10 + 10
+    assert plan.remaining_before == before.remaining_ahead == 11 + 11
     assert plan.remaining_after < plan.remaining_before
 
 
@@ -145,14 +149,14 @@ def test_pto_subtracted_from_workdays():
     pto = march(16, 17, 18, 19, 20)
     s = rl.summarize(Y2026, set(), pto, JAN1)
     m = next(x for x in s.months if x.key == "2026-03")
-    assert (m.pto, m.required) == (5, 10)  # (22 - 5) * 0.6 = 10.2
+    assert (m.pto, m.required) == (5, 11)  # (22 - 5) * 0.6 = 10.2
 
 
 def test_pto_as_a_day_in_office():
     p = Policy(start=Y2026.start, end=Y2026.end, pto_mode=PTO_AS_OFFICE)
     s = rl.summarize(p, set(), march(16, 17, 18, 19, 20), JAN1)
     m = next(x for x in s.months if x.key == "2026-03")
-    assert (m.pto, m.required) == (5, 8)  # 13 - 5
+    assert (m.pto, m.required) == (5, 9)  # 14 - 5
 
 
 def test_a_day_marked_both_ways_counts_as_pto():
@@ -235,15 +239,15 @@ def test_plan_respects_the_cap_on_pto_days_in_one_break():
 
 
 def test_plan_never_makes_a_month_impossible():
-    # Mar 23: 7 workdays left, 13 required, 7 logged, so 6 more are needed.
+    # Mar 23: 7 workdays left, 14 required, 7 logged, so 7 more are needed.
     logged = march(2, 3, 4, 5, 6, 9, 10)
     today = date(2026, 3, 22)
     p = Policy(start=date(2026, 3, 1), end=date(2026, 3, 31))
     plan = rl.plan_pto(p, logged, set(), today, 5)
     after = rl.summarize(p, logged, set(plan.dates), today)
     assert after.shortfall == 0
-    # A fifth PTO day would leave 2 free days for 3 required ones.
-    assert len(plan.dates) == 4
+    # A third PTO day would leave 4 free days for 5 required ones.
+    assert len(plan.dates) == 2
 
 
 def test_plan_stays_within_budget_and_the_policy_is_still_met():
@@ -274,7 +278,7 @@ def test_sick_days_count_like_pto_but_not_against_the_allowance():
     s = rl.summarize(Y2026, set(), march(20), JAN1, sick)
     m = next(x for x in s.months if x.key == "2026-03")
     assert (m.pto, m.sick) == (1, 2)
-    assert m.required == rl.required_days(22, 3, 60, PTO_SUBTRACT) == 11
+    assert m.required == rl.required_days(22, 3, 60, PTO_SUBTRACT) == 12
     assert (s.pto, s.sick) == (1, 2)
     same_as_pto = rl.summarize(Y2026, set(), march(16, 17, 20), JAN1)
     assert s.required == same_as_pto.required
@@ -284,7 +288,7 @@ def test_sick_days_as_days_in_office():
     p = Policy(start=Y2026.start, end=Y2026.end, pto_mode=PTO_AS_OFFICE)
     s = rl.summarize(p, march(2), set(), date(2026, 3, 9), march(3, 4))
     m = s.current
-    assert m.required == 13 - 2 and m.remaining == 10
+    assert m.required == 14 - 2 and m.remaining == 11
     assert m.share == pytest.approx(100 * 3 / 22)
 
 
@@ -347,13 +351,13 @@ def test_check_pto_numbers_come_from_the_calculator():
 
 
 def test_check_pto_flags_a_month_it_makes_impossible():
-    # Mar 22: 7 free workdays left and 6 more office days needed.
+    # Mar 22: 7 free workdays left and 7 more office days needed.
     logged = march(2, 3, 4, 5, 6, 9, 10)
     p = Policy(start=date(2026, 3, 1), end=date(2026, 3, 31))
     dates = [date(2026, 3, d) for d in (23, 24, 25, 26, 27)]
     checked = rl.check_pto(p, logged, set(), date(2026, 3, 22), dates, 5)
     ((month, extra),) = checked.short_months
-    assert month.key == "2026-03" and extra == 1
+    assert month.key == "2026-03" and extra == 2  # 17 days at 60% is 11; 7 logged, 2 free days left
 
 
 # -------------------------------------------------------------- saved state
@@ -409,20 +413,25 @@ def policy_with(pto, sick, hol, **kw):
 
 
 @pytest.mark.parametrize(
-    "pto, sick, hol, expected, base, credit",
+    "pto, sick, hol, total, credit, expected",
     [
         # 20 workdays, 2 weekday holidays, 3 PTO, 1 sick or other, 60%
-        (OUT, OUT, OUT, 9, 16, 0),   # floor(16 * 0.6)
-        (IN, IN, IN, 7, 22, 6),      # floor(22 * 0.6) = 13, less 2 + 3 + 1
-        (IN, OUT, OUT, 8, 19, 3),    # floor(19 * 0.6) = 11, less 3
-        (OUT, IN, OUT, 9, 17, 1),    # floor(17 * 0.6) = 10, less 1
-        (OUT, OUT, IN, 8, 18, 2),    # floor(18 * 0.6) = 10, less 2
+        (OUT, OUT, OUT, 10, 0, 10),  # 16 days, 9.6 rounds up to 10
+        (IN, IN, IN, 14, 6, 8),      # 22 days, 13.2 rounds up to 14, less 2 + 3 + 1
+        (IN, OUT, OUT, 12, 3, 9),    # 19 days, 11.4 rounds up to 12, less 3
+        (OUT, IN, OUT, 11, 1, 10),   # 17 days, 10.2 rounds up to 11, less 1
+        (OUT, OUT, IN, 11, 2, 9),    # 18 days, 10.8 rounds up to 11, less 2
     ],
 )
-def test_month_required_for_each_setting(pto, sick, hol, expected, base, credit):
-    need, got_base, got_credit = rl.month_required(policy_with(pto, sick, hol), 20, 2, 3, 1)
-    assert (got_base, got_credit) == (base, credit)
-    assert need == max(0, (got_base * 60) // 100 - got_credit) == expected
+def test_month_required_for_each_setting(pto, sick, hol, total, credit, expected):
+    need, base, got_credit, got_total = rl.month_required(policy_with(pto, sick, hol), 20, 2, 3, 1)
+    assert (got_total, got_credit, need) == (total, credit, expected)
+    assert got_total == -(-base * 60 // 100)
+
+
+def test_21_days_at_60_percent_is_13():
+    assert rl.month_required(policy_with(IN, IN, IN), 18, 3, 0, 0) == (10, 21, 3, 13)
+    assert rl.month_required(policy_with(OUT, OUT, OUT), 21, 0, 0, 0) == (13, 21, 0, 13)
 
 
 def test_month_required_matches_the_two_original_rules():
@@ -432,25 +441,27 @@ def test_month_required_matches_the_two_original_rules():
 
 
 def test_month_required_is_never_negative():
-    assert rl.month_required(policy_with(IN, IN, IN), 5, 10, 5, 5) == (0, 15, 20)
+    assert rl.month_required(policy_with(IN, IN, IN), 5, 10, 5, 5) == (0, 15, 20, 9)
 
 
 def test_a_new_visitor_has_everything_counting_as_a_day_in():
     p = rl.default_policy(date(2026, 3, 1))
     assert (p.pto_mode, p.sick_rule, p.holiday_mode) == (IN, IN, IN)
     s = rl.summarize(p, set(), set(), JAN1)
-    # November 2026: 21 weekdays, 3 of them holidays. floor(21 * 0.6) - 3 = 9.
+    # November 2026: 21 weekdays, 3 of them holidays. 12.6 rounds up to 13; 3 are already counted.
     nov = next(m for m in s.months if m.key == "2026-11")
-    assert (nov.workdays, nov.holidays, nov.base, nov.credit, nov.required) == (18, 3, 21, 3, 9)
+    assert (nov.workdays, nov.holidays, nov.base, nov.credit) == (18, 3, 21, 3)
+    assert (nov.total, nov.required) == (13, 10)
     assert nov.share == pytest.approx(100 * 3 / 21)
 
 
 def test_holidays_as_days_in_change_the_year():
     out = rl.summarize(policy_with(OUT, OUT, OUT), set(), set(), JAN1)
     held = rl.summarize(policy_with(OUT, OUT, IN), set(), set(), JAN1)
-    assert out.required == 142 and out.workdays == held.workdays == 244
+    assert out.required == 152 and out.workdays == held.workdays == 244
     assert held.base == 261 and held.credit == 17
-    assert held.required == sum((m.base * 60) // 100 - m.holidays for m in held.months)
+    assert held.required == sum(-(-m.base * 60 // 100) - m.holidays for m in held.months)
+    assert held.total == held.required + 17
     assert held.required < out.required
 
 
@@ -458,8 +469,8 @@ def test_sick_days_can_be_counted_differently_from_pto():
     p = policy_with(OUT, IN, OUT)
     s = rl.summarize(p, set(), march(20), JAN1, march(16), march(17))
     m = next(x for x in s.months if x.key == "2026-03")
-    # 22 workdays: PTO out leaves 21, floor(12.6) = 12, less 2 sick or other.
-    assert (m.base, m.credit, m.required) == (21, 2, 10)
+    # 22 workdays: PTO out leaves 21, 12.6 rounds up to 13, less 2 sick or other.
+    assert (m.base, m.credit, m.total, m.required) == (21, 2, 13, 11)
 
 
 def test_sick_setting_defaults_to_the_pto_setting():
@@ -474,10 +485,10 @@ def test_planner_uses_each_setting():
     p = Policy(pto_mode=IN, sick_mode=OUT, holiday_mode=OUT, **march_only)
     plan = rl.plan_pto(p, set(), set(), today, 4, sick_days=march(2))
     assert plan.office_days_saved == 4 and date(2026, 3, 2) not in plan.dates
-    # PTO out of the workdays: 21 left after the sick day, 12 required; 4 PTO leave 17, 10 required.
+    # PTO out of the workdays: 21 left after the sick day, 13 required; 4 PTO leave 17, 11 required.
     p = Policy(pto_mode=OUT, sick_mode=OUT, holiday_mode=OUT, **march_only)
     plan = rl.plan_pto(p, set(), set(), today, 4, sick_days=march(2))
-    assert (plan.remaining_before, plan.remaining_after) == (12, 10)
+    assert (plan.remaining_before, plan.remaining_after) == (13, 11)
     checked = rl.check_pto(p, set(), set(), today, [date(2026, 3, 2), date(2026, 3, 6)], 4, sick_days=march(2))
     assert checked.plan.dates == [date(2026, 3, 6)] and checked.rejected == [date(2026, 3, 2)]
 

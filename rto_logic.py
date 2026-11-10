@@ -6,7 +6,7 @@ The policy rules are the ones the app has always used:
 * Company holidays are the US federal holidays, the day after Thanksgiving
   and, optionally, a Christmas break (the weekdays of Dec 24 to Dec 31).
 * The requirement is counted month by month, a percentage of that month's
-  workdays, rounded down.
+  workdays, rounded up to a whole day.
 * PTO, sick days (with other absences) and company holidays are each
   accounted for in one of two ways: taken out of the workdays before the
   percentage is applied, or counted as a day in the office.
@@ -168,12 +168,12 @@ def month_key(d: date) -> str:
 
 
 def required_days(workdays: int, pto: int, percent: float, pto_mode: str) -> int:
-    """Office days required in one month. Rounded down, never negative."""
+    """Office days required in one month. Rounded up, never negative."""
     share = Fraction(str(percent)) / 100
     if pto_mode == PTO_SUBTRACT:
-        need = math.floor(max(0, workdays - pto) * share)
+        need = math.ceil(max(0, workdays - pto) * share)
     else:
-        need = math.floor(workdays * share) - pto
+        need = math.ceil(workdays * share) - pto
     return max(0, need)
 
 
@@ -184,7 +184,10 @@ def month_required(policy: Policy, workdays: int, holidays: int, pto: int, sick_
     holidays. Anything set to "subtract" comes out of the days the percentage
     is applied to; anything set to "office" is credited as a day in.
 
-    Returns (office days required, days the percentage applies to, days credited).
+    The month's total is the percentage of the counted days, rounded up.
+
+    Returns (office days still to attend in person, days the percentage
+    applies to, days credited, the month's total).
     """
     base, credit = workdays, 0
     if policy.holiday_mode == PTO_AS_OFFICE:
@@ -199,8 +202,8 @@ def month_required(policy: Policy, workdays: int, holidays: int, pto: int, sick_
     else:
         credit += sick_other
     base = max(0, base)
-    need = math.floor(base * Fraction(str(policy.percent)) / 100) - credit
-    return max(0, need), base, credit
+    total = math.ceil(base * Fraction(str(policy.percent)) / 100)
+    return max(0, total - credit), base, credit, total
 
 
 def _share(base: int, credit: int, attended: int) -> float:
@@ -241,6 +244,7 @@ class MonthSummary:
     other: int = 0
     base: int = 0  # days the percentage applies to
     credit: int = 0  # days counted as in the office without being there
+    total: int = 0  # the percentage of `base`, rounded up: credit plus `required`
 
 
 @dataclass(frozen=True)
@@ -259,6 +263,7 @@ class Summary:
     other: int = 0
     base: int = 0  # days the percentage applies to
     credit: int = 0  # days counted as in the office without being there
+    total: int = 0  # the percentage of `base`, rounded up: credit plus `required`
 
     @property
     def remaining_ahead(self) -> int:
@@ -302,7 +307,7 @@ def summarize(policy: Policy, office_days, pto_days, today: date, sick_days=(), 
         m_sick = sum(1 for d in days if d in sick)
         m_other = sum(1 for d in days if d in other)
         m_att = sum(1 for d in days if d in office)
-        req, m_base, m_credit = month_required(
+        req, m_base, m_credit, m_total = month_required(
             policy, len(days), hol_count.get(key, 0), m_pto, m_sick + m_other
         )
         remaining = max(0, req - m_att)
@@ -327,6 +332,7 @@ def summarize(policy: Policy, office_days, pto_days, today: date, sick_days=(), 
                 other=m_other,
                 base=m_base,
                 credit=m_credit,
+                total=m_total,
             )
         )
 
@@ -347,6 +353,7 @@ def summarize(policy: Policy, office_days, pto_days, today: date, sick_days=(), 
         other=len(other),
         base=sum(m.base for m in months),
         credit=sum(m.credit for m in months),
+        total=sum(m.total for m in months),
     )
 
 

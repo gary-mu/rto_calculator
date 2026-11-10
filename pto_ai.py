@@ -66,7 +66,7 @@ def required_rule(policy: rl.Policy) -> str:
     def how(mode):
         return "counts as a day in the office" if mode == rl.PTO_AS_OFFICE else "is taken out of the workdays first"
     return (
-        f"Per month: required = floor(counted_days * {policy.percent:g} / 100) - credited_days, never below 0. "
+        f"Per month: required = ceil(counted_days * {policy.percent:g} / 100) - credited_days, never below 0. "
         f"A PTO day {how(policy.pto_mode)}. A sick day or other absence {how(policy.sick_rule)}. "
         f"A company holiday {how(policy.holiday_mode)}. "
         "counted_days are the weekdays left after everything taken out; credited_days are the days that count as in the office."
