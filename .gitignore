@@ -2,4 +2,12 @@ __pycache__/
 *.pyc
 .env
 .venv/
-.streamlit
+.streamlit/secrets.toml
+.DS_Store
+.pytest_cache/
+_build/node_modules/
+.hallmark/before/
+.hallmark/after/
+.hallmark/*.json
+.hallmark/*.html
+.hallmark/shots/

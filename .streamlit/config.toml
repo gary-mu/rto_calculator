@@ -1,0 +1,14 @@
+# The look lives in themes.py and theme/*.css, which the person can switch at
+# run time. This file only gives Streamlit a neutral starting point.
+[theme]
+base = "light"
+baseFontSize = 16
+baseRadius = "8px"
+showWidgetBorder = true
+showSidebarBorder = true
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
