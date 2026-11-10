@@ -1,0 +1,36 @@
+name: Keep the app awake
+
+# Streamlit Community Cloud puts an app to sleep when nobody visits it.
+# This opens the app in a real browser a few times a day, and wakes it if it
+# has gone to sleep. GitHub pauses scheduled workflows in a repository with
+# no activity for 60 days; re-enable it from the Actions tab if that happens.
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"  # every 6 hours, off the top of the hour
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keep-awake
+  cancel-in-progress: true
+
+jobs:
+  visit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+      - name: Visit the app
+        env:
+          APP_URL: https://rto-calculate.streamlit.app/
+        run: python scripts/keep_awake.py

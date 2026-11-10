@@ -69,6 +69,14 @@ python -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirement
 .venv/bin/python -m pytest tests
 ```
 
+## Keeping the live app awake
+
+Streamlit Community Cloud puts an app to sleep when nobody visits it.
+`.github/workflows/keep-awake.yml` opens the app in a headless browser every
+six hours with `scripts/keep_awake.py`, and presses the wake-up button if the
+app has gone to sleep. It can also be run by hand from the Actions tab.
+GitHub pauses scheduled workflows after 60 days without repository activity.
+
 ## Layout
 
 - `rto_app.py`: the screen.
