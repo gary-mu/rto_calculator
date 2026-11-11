@@ -85,6 +85,8 @@ def test_suggest_sends_structured_request_and_reads_the_answer(monkeypatch):
     assert sent["model"] == "gemini-4-carbon"
     assert sent["config"].response_mime_type == "application/json"
     assert sent["config"].response_json_schema == pto_ai.SCHEMA
+    # Low thinking keeps the answer well inside the request deadline.
+    assert sent["config"].thinking_config.thinking_level.name == "LOW"
     assert "Thanksgiving week" in sent["contents"]
 
 
@@ -103,6 +105,7 @@ def test_suggest_turns_an_empty_or_unreadable_answer_into_a_message(monkeypatch,
         (429, "Resource exhausted", "quota"),
         (404, "model not found", "not available"),
         (503, "overloaded", "returned an error"),
+        (504, "Deadline expired before operation could complete.", "took too long"),
     ],
 )
 def test_suggest_turns_api_errors_into_messages(monkeypatch, code, message, expected):
