@@ -17,7 +17,12 @@ from google.genai import errors, types
 import rto_logic as rl
 
 MODEL = "gemini-4-carbon"
-TIMEOUT_MS = 120_000
+# At the model's default thinking level a plan took about 110 seconds, right at
+# the request deadline, and the API answered 504 whenever it ran a little
+# over. At "LOW" the same plan comes back in about 6 seconds. The app checks
+# every date and does the counting itself, so the model does not need to.
+THINKING_LEVEL = "LOW"
+TIMEOUT_MS = 180_000
 KEY_NAMES = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
 MAX_WISH_CHARS = 500
 
@@ -129,6 +134,7 @@ def suggest(api_key: str, context: dict) -> Suggestion:
                 system_instruction=SYSTEM,
                 response_mime_type="application/json",
                 response_json_schema=SCHEMA,
+                thinking_config=types.ThinkingConfig(thinking_level=THINKING_LEVEL),
             ),
         )
     except errors.APIError as e:
@@ -138,6 +144,10 @@ def suggest(api_key: str, context: dict) -> Suggestion:
             raise PlannerError("The AI planner's API key was not accepted.") from e
         if code == 429:
             raise PlannerError("The AI planner is over its quota or busy. Try again in a minute.") from e
+        if code == 504:
+            raise PlannerError(
+                "The AI planner took too long to answer. Try again, or use the quick plan."
+            ) from e
         if code == 404:
             raise PlannerError(f"The AI planner's model ({MODEL}) is not available to this API key.") from e
         raise PlannerError(f"The AI planner returned an error ({code}). Try again.") from e
