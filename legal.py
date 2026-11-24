@@ -5,6 +5,20 @@ changes what it stores or sends, change this file in the same pull request.
 
 UPDATED = "November 23, 2026"
 REPO = "https://github.com/gary-mu/rto_calculator"
+# A private address for questions about someone's data. Until one is set, the
+# pages point to GitHub issues only.
+CONTACT_EMAIL = ""
+
+
+def _contact(what: str) -> str:
+    issues = f"[{REPO.removeprefix('https://')}/issues]({REPO}/issues)"
+    if CONTACT_EMAIL:
+        return (
+            f"{what}: email [{CONTACT_EMAIL}](mailto:{CONTACT_EMAIL}). "
+            f"For bugs and general questions you can also open an issue at {issues}."
+        )
+    return f"{what}: open an issue at {issues}."
+
 
 PRIVACY = f"""
 # Privacy policy
@@ -22,8 +36,9 @@ the app keeps about you, where, and what it sends to anyone else.
 - If you choose to sign in with Google, the same information is also saved to
   a database so it follows you to your other devices. It is saved under a
   scrambled ID. Your name and email address are not saved.
-- There are no ads and no analytics, and nothing is sold or shared for
-  marketing.
+- The app itself has no ads and adds no analytics, and nothing you enter is
+  sold or shared for marketing. The service that hosts the app sets some
+  cookies of its own, described under "Cookies" below.
 
 ## What you enter
 
@@ -50,8 +65,9 @@ Signing in is optional. When you do:
 - The app uses the account ID to work out which saved data is yours, and
   shows your email address on screen so you can see which account you are
   using. It does not use the name or the picture.
-- A sign-in cookie is kept in your browser so you stay signed in. It expires
-  after 30 days, or when you sign out.
+- A sign-in cookie is kept in your browser so you stay signed in. It is
+  strictly necessary for signing in, and it expires after 30 days or when
+  you sign out.
 - The database holds one record for you: a scrambled version of your Google
   account ID (a salted hash, which cannot be turned back into the ID), the
   information listed under "What you enter", a revision number and the time
@@ -71,6 +87,16 @@ booked, the workdays that are still free, and whatever you typed in the
 address or your account ID. Do not type personal details into that box.
 Nothing is sent to Gemini unless you press the button.
 
+## Cookies
+
+- **From the app:** if you sign in, the sign-in cookie described above, and
+  a security cookie that protects the sign-in from forged requests. The app
+  sets no advertising or analytics cookies.
+- **From the host:** the app runs on Streamlit Community Cloud, which sets
+  cookies of its own on every app it hosts, including analytics cookies. The
+  app does not control those cookies and does not read them. They are
+  covered by Streamlit's privacy policy.
+
 ## Other services the app relies on
 
 - **Streamlit Community Cloud** hosts the app. Like any web host it handles
@@ -87,13 +113,15 @@ Each of these handles data under its own privacy policy.
 
 - Data in your browser stays until you clear it.
 - Data in your account stays until you delete it. "Delete account" in the
-  sidebar removes your record from the database straight away and signs you
-  out.
+  sidebar removes your record from the live database straight away and signs
+  you out. If the database provider keeps routine backups, a copy may remain
+  in them until those backups expire.
 - You can download a copy of your data at any time with "Download a backup".
 
 ## Children
 
-The app is meant for working adults and is not directed at children.
+The app is meant for working adults and is not directed at children under
+13 (or under 16 in the EEA and the UK).
 
 ## Changes
 
@@ -102,8 +130,7 @@ history is public in the app's [source code]({REPO}).
 
 ## Contact
 
-Questions or requests about your data: open an issue at
-[{REPO.removeprefix("https://")}/issues]({REPO}/issues).
+{_contact("Questions or requests about your data")}
 """
 
 TERMS = f"""
@@ -144,8 +171,10 @@ the privacy policy.
 
 ## Using the app fairly
 
-Do not misuse the app: do not try to break it, overload it, get at other
-people's data, or use it to do anything unlawful.
+Do not misuse the app: do not try to break it, overload it, send it
+automated or excessive requests, get at other people's data, or use it to do
+anything unlawful. Access may be limited or blocked for anyone who misuses
+it.
 
 ## No guarantees
 
@@ -163,8 +192,7 @@ the app after a change means you accept the new terms.
 
 ## Contact
 
-Questions about these terms: open an issue at
-[{REPO.removeprefix("https://")}/issues]({REPO}/issues).
+{_contact("Questions about these terms")}
 """
 
 PAGES = {
