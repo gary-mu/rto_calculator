@@ -18,10 +18,19 @@
 .stApp p, .stApp label, .stApp li { font-family: var(--font-body); }
 .stApp p, .stApp label, .stApp [data-testid="stWidgetLabel"] p, .stApp [data-testid="stMarkdownContainer"] { color: var(--color-ink); }
 .lead { color: var(--color-ink-2); margin-block-start: var(--space-xs); }
-.stApp .wordmark { font-family: var(--font-display); font-weight: var(--display-weight); letter-spacing: var(--tracking-display); font-size: var(--text-xl); color: var(--color-ink); }
+.stApp .wordmark { display: flex; align-items: center; gap: var(--space-sm); font-family: var(--font-display); font-weight: var(--display-weight); letter-spacing: var(--tracking-display); font-size: var(--text-xl); color: var(--color-ink); }
+.stApp .wordmark img { inline-size: 44px; block-size: 44px; flex: none; border-radius: var(--radius-inner); }
+.stApp .wordmark span { font: inherit; letter-spacing: inherit; color: inherit; min-width: 0; }
 .stApp [data-testid="stCaptionContainer"], .stApp [data-testid="stCaptionContainer"] p { opacity: 1; color: var(--color-muted); font-size: var(--text-sm); }
 .stApp .group-label { font-size: var(--text-sm); color: var(--color-ink); }
 .st-key-counts { gap: var(--space-2xs); }
+.stApp a { color: var(--color-accent); text-decoration-thickness: 1px; text-underline-offset: 0.16em; }
+.stApp a:hover { color: var(--color-accent-hi); }
+/* the privacy policy and terms: one readable column */
+.st-key-legal { max-width: 68ch; margin-inline: auto; }
+.st-key-legal h1 { font-size: var(--text-3xl); line-height: 1.1; padding: var(--space-lg) 0 var(--space-xs); }
+.st-key-legal h2 { font-size: var(--text-lg); padding: var(--space-lg) 0 var(--space-2xs); }
+.st-key-legal p, .st-key-legal li { color: var(--color-ink); line-height: 1.6; }
 .st-key-store { position: absolute; width: 1px; height: 1px; overflow: hidden; }
 .loading { padding-block: var(--space-2xl) var(--space-md); }
 .loading p + p { color: var(--color-muted); margin-block-start: var(--space-xs); }
