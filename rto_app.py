@@ -8,6 +8,7 @@ import calendar
 import csv
 import io
 import os
+import time
 from datetime import date
 from html import escape
 from pathlib import Path
@@ -17,6 +18,7 @@ import streamlit.components.v1 as components
 
 import pto_ai
 import rto_logic as rl
+import sync
 import themes
 
 ROOT = Path(__file__).parent
@@ -126,6 +128,175 @@ def plan_line(plan: rl.PtoPlan) -> str:
     )
 
 
+# ---------------------------------------------------------------- accounts
+#
+# Signing in is optional. Without it everything stays in the browser, as
+# before. With it, the same state is also kept in a database under a
+# scrambled ID so it follows the person to their other devices.
+
+
+def secret(section: str, name: str):
+    try:
+        return st.secrets[section][name]
+    except Exception:  # no secrets file, or no such entry
+        return None
+
+
+def auth_configured() -> bool:
+    try:
+        return "auth" in st.secrets
+    except Exception:
+        return False
+
+
+@st.cache_resource
+def account_store():
+    url, key = secret("sync", "supabase_url"), secret("sync", "supabase_key")
+    if url and key:
+        return sync.SupabaseStore(url, key)
+    # A file on a laptop, to try the signed-in flow without a database. Ignored
+    # as soon as real sign-in is configured.
+    path = os.environ.get("RTO_DEV_STORE")
+    if path and not auth_configured():
+        return sync.FileStore(path)
+    return None
+
+
+def sign_in_offered() -> bool:
+    if account_store() is None:
+        return False
+    return auth_configured() or bool(os.environ.get("RTO_DEV_USER"))
+
+
+def account():
+    """(scrambled ID, a label to show) for the signed-in person, or (None, None)."""
+    pepper = secret("sync", "pepper") or ""
+    if auth_configured():
+        if getattr(st.user, "is_logged_in", False) and st.user.get("sub"):
+            subject = f"{st.user.get('iss', '')}:{st.user.get('sub')}"
+            return sync.user_key(subject, pepper), st.user.get("email") or "your Google account"
+        return None, None
+    dev = os.environ.get("RTO_DEV_USER")  # a stand-in person, laptop only
+    if dev and ss.get("dev_signed_in"):
+        return sync.user_key(f"dev:{dev}", pepper), dev
+    return None, None
+
+
+def sign_in():
+    if auth_configured():
+        st.login()
+    else:
+        ss.dev_signed_in = True
+
+
+def sign_out():
+    ss.acct_key = None
+    if auth_configured():
+        st.logout()
+    else:
+        ss.dev_signed_in = False
+
+
+def session_state_dict() -> dict:
+    return {
+        "policy": current_policy(), "office": set(ss.office), "pto": set(ss.pto),
+        "sick": set(ss.sick), "other": set(ss.other), "ui": {"theme": ss.ui_theme, "mode": ss.ui_mode},
+    }
+
+
+def fingerprint() -> str:
+    return sync.content_hash(current_policy(), ss.office, ss.pto, ss.sick, ss.other)
+
+
+def mark_synced(key: str):
+    """This browser now holds a copy of the account."""
+    ss.owner, ss.synced, ss.pushed = key, fingerprint(), content_payload()
+
+
+def account_sync() -> bool:
+    """Bring the session and the account together. True if the session changed."""
+    store, (key, _) = account_store(), account()
+    if store is None or key is None:
+        ss.acct_key = None
+        return False
+    if time.time() < ss.get("sync_retry_after", 0):
+        return False
+    try:
+        if ss.get("acct_key") != key:  # first run since signing in
+            remote = store.get(key)
+            acct = sync.load(remote.payload, ss.today) if remote else None
+            local = session_state_dict()
+            is_copy = ss.get("owner") == key and ss.get("synced") == fingerprint()
+            choice = sync.decide(local, is_copy, acct)
+            ss.acct_key, ss.pending = key, None
+            if choice == sync.PUSH:
+                ss.acct_rev = store.put(key, content_payload(), None)
+                mark_synced(key)
+            elif choice == sync.TAKE:
+                apply_state(acct)
+                ss.acct_rev = remote.rev
+                mark_synced(key)
+            else:
+                ss.acct_rev = remote.rev
+                ss.pending = {"payload": remote.payload, "extra": sync.extra_days(acct, local)}
+            ss.sync_error = None
+            return choice == sync.TAKE
+        if ss.get("pending") or content_payload() == ss.get("pushed"):
+            return False
+        try:
+            ss.acct_rev = store.put(key, content_payload(), ss.get("acct_rev"))
+            mark_synced(key)
+            ss.sync_error = None
+            return False
+        except sync.Conflict:
+            remote = store.get(key)
+            if remote is None:  # the account's data was deleted elsewhere
+                ss.acct_rev = store.put(key, content_payload(), None)
+                mark_synced(key)
+                return False
+            apply_state(sync.load(remote.payload, ss.today))
+            ss.acct_rev = remote.rev
+            mark_synced(key)
+            ss.sync_note = (
+                "Your account was changed on another device. This screen now shows those changes; "
+                "your last change here was not saved."
+            )
+            return True
+    except sync.StoreError:
+        ss.sync_error = "Could not reach your account. Changes are kept in this browser and will be sent when it is back."
+        ss.sync_retry_after = time.time() + 60
+        return False
+
+
+def resolve_pending(add: bool):
+    pending = ss.get("pending")
+    if not pending:
+        return
+    acct = sync.load(pending["payload"], ss.today)
+    if add:
+        apply_state(sync.merge(acct, session_state_dict()))
+        ss.pushed = None  # differs from the account now: saved on this run
+    else:
+        apply_state(acct)
+        mark_synced(ss.acct_key)
+    ss.pending = None
+
+
+def delete_account_data():
+    store, (key, _) = account_store(), account()
+    if store is None or key is None:
+        return
+    try:
+        store.delete(key)
+    except sync.StoreError:
+        ss.sync_error = "Could not reach your account, so nothing was deleted. Try again."
+        return
+    ss.owner = ss.synced = ss.pushed = None
+    ss.confirm_delete = False
+    ss.account_deleted = True
+    sign_out()
+
+
 def apply_state(state: dict):
     """Put a saved state into the session, widgets included."""
     policy = state["policy"]
@@ -167,10 +338,19 @@ def current_policy() -> rl.Policy:
     return policy
 
 
-def saved_payload() -> str:
+def content_payload() -> str:
+    """What an account holds: policy, days, holidays and appearance."""
     return rl.dump_state(
         current_policy(), ss.office, ss.pto, ss.sick, ss.other, {"theme": ss.ui_theme, "mode": ss.ui_mode}
     )
+
+
+def saved_payload() -> str:
+    """What this browser keeps: the same, plus which account it is a copy of."""
+    ui = {"theme": ss.ui_theme, "mode": ss.ui_mode}
+    if ss.get("owner"):
+        ui.update(owner=ss.owner, synced=ss.get("synced"))
+    return rl.dump_state(current_policy(), ss.office, ss.pto, ss.sick, ss.other, ui)
 
 
 # ---------------------------------------------------------------- callbacks
@@ -280,6 +460,8 @@ html(f"<style>{page_css(theme_now, mode_now)}</style>")
 
 # The saved state round trip. Callbacks have already run, so the session
 # holds the newest state and it can be handed to the browser right here.
+if ss.get("hydrated") and account_sync():
+    st.rerun()  # the account's state replaced this session's: draw it from the top
 payload = saved_payload() if ss.get("hydrated") else None
 with st.container(key="store"):
     saved = day_store(save=payload, key="day_store", default=None)
@@ -297,6 +479,7 @@ if not ss.get("hydrated"):
     except ValueError:
         ss.today = date.today()
     state = rl.load_state((saved or {}).get("raw"), ss.today)
+    ss.owner, ss.synced = state["ui"].get("owner"), state["ui"].get("synced")
     # A link can name a look: ?theme=cobalt&mode=dark
     state["ui"] = {"theme": qp.get("theme") or state["ui"].get("theme"), "mode": qp.get("mode") or state["ui"].get("mode")}
     apply_state(state)
@@ -350,10 +533,40 @@ with st.sidebar:
     st.radio("Mode", list(themes.MODES), key="ui_mode", horizontal=True, format_func=str.capitalize)
 
     st.header("Your data")
-    st.caption(
-        "Your policy, days, holidays and theme are saved in this browser only. "
-        "Nothing is sent to a server, and another browser or device starts empty."
-    )
+    signed_key, signed_label = account()
+    if not sign_in_offered():
+        st.caption(
+            "Your policy, days, holidays and theme are saved in this browser only. "
+            "Nothing is sent to a server, and another browser or device starts empty."
+        )
+    elif signed_key:
+        st.caption(
+            f"Signed in as {signed_label}. Your policy, days and holidays are saved to your account "
+            "and follow you to your other devices."
+        )
+        if ss.get("sync_error"):
+            st.warning(ss.sync_error)
+        if ss.get("confirm_delete"):
+            st.warning(
+                "This deletes what your account holds and signs you out. "
+                "The copy in this browser stays until you clear it."
+            )
+            k1, k2 = st.columns(2)
+            k1.button("Yes, delete", on_click=delete_account_data, width="stretch")
+            k2.button("Keep it", on_click=lambda: ss.update(confirm_delete=False), width="stretch")
+        else:
+            k1, k2 = st.columns(2)
+            k1.button("Sign out", on_click=sign_out, width="stretch")
+            k2.button("Delete account", on_click=lambda: ss.update(confirm_delete=True), width="stretch")
+        st.caption("The account is kept under a scrambled ID. Your name and email are not stored.")
+    else:
+        st.caption(
+            "Your policy, days, holidays and theme are saved in this browser. "
+            "Sign in if you want them on your other devices too. It is optional."
+        )
+        st.button("Sign in with Google", on_click=sign_in, width="stretch", key="sign_in")
+        if ss.pop("account_deleted", False):
+            st.success("Your account's data was deleted and you are signed out.")
     st.download_button(
         "Download a backup", data=saved_payload(),
         file_name="rto-days.json", mime="application/json", width="stretch",
@@ -465,6 +678,21 @@ if summary.pto > policy.pto_allowance:
     )
 if ss.pop("restored", False):
     st.success("Backup restored.")
+if ss.get("sync_note"):
+    st.info(ss.pop("sync_note"))
+if ss.get("pending"):
+    extra = ss.pending["extra"]
+    with st.container(key="pending"):
+        st.warning(
+            f"This browser has {plural(extra, 'marked day')} that your account does not. "
+            "Nothing has been changed yet. What you see now is this browser's copy."
+        )
+        m1, m2, _ = st.columns([3, 3, 4])
+        m1.button(
+            f"Add {'it' if extra == 1 else 'them'} to my account", type="primary",
+            on_click=resolve_pending, args=(True,), width="stretch", key="merge_add",
+        )
+        m2.button("Use my account's days", on_click=resolve_pending, args=(False,), width="stretch", key="merge_take")
 
 track_tab, plan_tab, month_tab, holiday_tab = st.tabs(["Track", "PTO-maxxing ✨", "By month", "Company Holidays"])
 

@@ -11,3 +11,4 @@ _build/node_modules/
 .hallmark/*.json
 .hallmark/*.html
 .hallmark/shots/
+_build/dev-accounts.json

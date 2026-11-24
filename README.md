@@ -31,6 +31,66 @@ sick days (other absences follow sick days) and company holidays. A new
 visitor starts with all three counting as a day in. Sick days and other
 absences never use the PTO allowance.
 
+## Optional accounts (sign in with Google)
+
+Signing in is optional. Signed out, everything stays in the browser. Signed
+in, the same state is also kept in a database so it follows the person to
+their other devices.
+
+- **What is stored:** the policy, the marked days, the holiday list and the
+  theme, under a scrambled ID (a salted hash of the Google account ID). No
+  name and no email. "Delete account" removes the row.
+- **A browser that already has days:** if the account also has days and the
+  two differ, the app asks whether to add this browser's days to the account
+  or use the account's. Nothing is dropped silently.
+- **Two devices at once:** each save names the revision it started from. A
+  save from a stale copy is refused, and that device reloads the account
+  with a notice.
+
+The sign-in button only appears when both parts below are configured.
+
+**1. Google sign-in.** In Google Cloud Console, create an OAuth client of
+type "Web application" with the redirect URI
+`https://rto-calculate.streamlit.app/oauth2callback` (and
+`http://localhost:8501/oauth2callback` to try it locally). Only the basic
+`openid`, `email` and `profile` scopes are used.
+
+**2. The database.** Create a Supabase project and run this in its SQL editor:
+
+```sql
+create table rto_state (
+  user_key   text primary key,
+  payload    text not null,
+  rev        bigint not null,
+  updated_at timestamptz not null default now()
+);
+alter table rto_state enable row level security;
+```
+
+With row level security on and no policies, only the secret key can read
+or write the table.
+
+**3. Secrets** (Streamlit Cloud: the app's Settings, then Secrets; locally:
+`.streamlit/secrets.toml`, which is git-ignored):
+
+```toml
+[auth]
+redirect_uri = "https://rto-calculate.streamlit.app/oauth2callback"
+cookie_secret = "a long random string"
+client_id = "from Google"
+client_secret = "from Google"
+server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
+
+[sync]
+supabase_url = "https://your-project.supabase.co"
+supabase_key = "the project's secret (service role) key"
+pepper = "another long random string; changing it later orphans every account"
+```
+
+To try the signed-in flow on a laptop without either, set `RTO_DEV_USER` to
+any name and `RTO_DEV_STORE` to a file path before starting the app. That
+stand-in is ignored as soon as `[auth]` is configured.
+
 ## The AI planner's key
 
 The AI plan needs a Gemini API key. Without one the button is disabled and
@@ -82,6 +142,8 @@ GitHub pauses scheduled workflows after 60 days without repository activity.
 - `rto_app.py`: the screen.
 - `rto_logic.py`: the calculations, with no Streamlit in them.
 - `pto_ai.py`: the Gemini request for the AI plan.
+- `sync.py`: optional accounts: the sign-in decision, merging, and the
+  database store.
 - `tests/`: required days, remaining days, sick days, PTO planning, the AI
   planner's request and error handling, saved state.
 - `themes.py`: the five themes (Garden, Ultraviolet, Furrow, Cobalt, Dusk),
