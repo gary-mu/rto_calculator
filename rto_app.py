@@ -4,6 +4,7 @@ in pto_ai.py only proposes dates; the look lives in themes.py and theme/."""
 
 from __future__ import annotations
 
+import base64
 import calendar
 import csv
 import io
@@ -16,6 +17,7 @@ from pathlib import Path
 import streamlit as st
 import streamlit.components.v1 as components
 
+import legal
 import pto_ai
 import rto_logic as rl
 import sync
@@ -25,7 +27,7 @@ ROOT = Path(__file__).parent
 MARKS = ("in", "pto", "sick", "other")  # what the calendar's wheel can set
 AI_CALLS_PER_VISIT = 5
 
-st.set_page_config(page_title="RTO calculator", page_icon=":material/calendar_month:", layout="wide")
+st.set_page_config(page_title="RTO calculator", page_icon=str(ROOT / "assets" / "app-logo-128.png"), layout="wide")
 
 day_store = components.declare_component("day_store", path=str(ROOT / "components" / "day_store"))
 month_tray = components.declare_component("month_tray", path=str(ROOT / "components" / "month_tray"))
@@ -50,6 +52,26 @@ def tray_css(theme: str, mode: str) -> str:
     return "\n".join(
         [themes.font_import(theme), themes.root_block(theme, mode), _read("tokens.css"), _read("tray.css")]
     )
+
+
+@st.cache_data
+def wordmark() -> str:
+    """The logo and the app's name, as one line of markup."""
+    logo = base64.b64encode((ROOT / "assets" / "app-logo-128.png").read_bytes()).decode()
+    return (
+        '<p class="wordmark">'
+        f'<img src="data:image/png;base64,{logo}" alt="" width="44" height="44">'
+        "<span>RTO calculator</span></p>"
+    )
+
+
+def page_link(page: str) -> str:
+    """A full address for one of the app's own pages, so it can be opened and shared."""
+    try:
+        base = st.context.url or ""
+    except Exception:
+        base = ""
+    return f"{base}?page={page}"
 
 
 def html(markup: str):
@@ -458,6 +480,19 @@ theme_now, mode_now = themes.normalise(
 )
 html(f"<style>{page_css(theme_now, mode_now)}</style>")
 
+# The privacy policy and the terms are plain pages: ?page=privacy, ?page=terms.
+if qp.get("page") in legal.PAGES:
+    title, body = legal.PAGES[qp.get("page")]
+    with st.container(key="legal"):
+        html(wordmark())
+        st.markdown(body)
+        other = next(k for k in legal.PAGES if k != qp.get("page"))
+        st.markdown(
+            f"[Open the calculator]({page_link('x').split('?')[0]}) &nbsp; "
+            f"[{legal.PAGES[other][0]}]({page_link(other)})"
+        )
+    st.stop()
+
 # The saved state round trip. Callbacks have already run, so the session
 # holds the newest state and it can be handed to the browser right here.
 if ss.get("hydrated") and account_sync():
@@ -469,7 +504,7 @@ with st.container(key="store"):
 if not ss.get("hydrated"):
     if saved is None and not ss.get("skip_saved"):
         html(
-            '<div class="loading" role="status"><p class="wordmark">RTO calculator</p>'
+            f'<div class="loading" role="status">{wordmark()}'
             "<p>Looking for the days you saved in this browser…</p></div>"
         )
         st.button("Start without them", key="skip_saved_btn", on_click=lambda: ss.update(skip_saved=True))
@@ -492,7 +527,7 @@ today: date = ss.today
 # ----------------------------------------------------------------- sidebar
 
 with st.sidebar:
-    html('<p class="wordmark">RTO calculator</p>')
+    html(wordmark())
     st.header("Your policy")
     st.date_input("Start Date", key="p_start")
     st.date_input("End Date", key="p_end")
@@ -583,6 +618,10 @@ with st.sidebar:
             "Clear my days", on_click=lambda: ss.update(confirm_clear=True), width="stretch",
             disabled=not has_days,
         )
+
+    st.caption(
+        f"[Privacy policy]({page_link('privacy')}) &nbsp; [Terms of service]({page_link('terms')})"
+    )
 
 away_days = ss.pto | ss.sick | ss.other
 summary = rl.summarize(policy, ss.office, ss.pto, today, ss.sick, ss.other)

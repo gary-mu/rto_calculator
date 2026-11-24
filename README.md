@@ -142,6 +142,9 @@ GitHub pauses scheduled workflows after 60 days without repository activity.
 - `rto_app.py`: the screen.
 - `rto_logic.py`: the calculations, with no Streamlit in them.
 - `pto_ai.py`: the Gemini request for the AI plan.
+- `legal.py`: the privacy policy and terms of service, shown at `?page=privacy`
+  and `?page=terms`. Keep them in step with what the code stores and sends.
+- `assets/app-logo*.png`: the logo (browser tab icon and sidebar).
 - `sync.py`: optional accounts: the sign-in decision, merging, and the
   database store.
 - `tests/`: required days, remaining days, sick days, PTO planning, the AI
